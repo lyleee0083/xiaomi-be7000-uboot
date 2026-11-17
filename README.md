@@ -18,7 +18,7 @@
 sudo apt-get update
 sudo apt-get install -y build-essential libncurses-dev gawk git gettext libssl-dev python3 \
   wget cpio flex bison bc rsync nodejs npm gzip zopfli device-tree-compiler
-npm install -g html-minifier-terser clean-css terser svgo
+npm install -g html-minifier-terser@7.2.0 clean-css@5.3.3 terser@5.51.2 svgo@4.1.0
 ```
 
 将作者的 ARM OpenWrt 工具链克隆到本仓库的同级目录
@@ -27,6 +27,7 @@ npm install -g html-minifier-terser clean-css terser svgo
 git clone https://github.com/lyleee0083/xiaomi-be7000-uboot.git
 git clone --depth=1 https://github.com/1980490718/toolchain-arm_cortex-a7_gcc-5.2.0.git staging_dir
 cd xiaomi-be7000-uboot
+export NODE_PATH="$(npm root -g)"
 ./build.sh ipq9574_xiaomi_be7000
 ```
 
