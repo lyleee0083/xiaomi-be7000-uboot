@@ -1,199 +1,43 @@
-name: Build U-Boot for IPQ Devices
+name: Build Xiaomi BE7000 U-Boot
 
 on:
   push:
-  # pull_request:
-  schedule:
-    - cron: '0 0 15 * *'
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      ipq_type:
-        description: 'Please select the IPQ type(s) to build. for example: ipq6018,ipq807x,all = all types.'
-        required: true
-        default: 'all'
-        type: choice
-        options:
-          - all
-          - ipq40xx
-          - ipq5018
-          - ipq5332
-          - ipq6018
-          - ipq806x
-          - ipq807x
-          - ipq9574
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    env:
-      TZ: Asia/Shanghai
-      NODE_VERSION: '24'
-      SHOULD_RUN_STEP: "github.event_name != 'workflow_dispatch' || inputs.ipq_type == 'all' || inputs.ipq_type == matrix.ipq_type"
-      TOOLCHAIN: "https://github.com/1980490718/toolchain-arm_cortex-a7_gcc-5.2.0.git"
-      DEPENDENCIES: "build-essential libncurses5-dev gawk git gettext libssl-dev python3 wget cpio flex bison bc rsync zopfli device-tree-compiler"
-
-    strategy:
-      matrix:
-        ipq_type: ['ipq40xx', 'ipq5018', 'ipq5332', 'ipq6018', 'ipq806x', 'ipq807x', 'ipq9574']
-      fail-fast: false
-
-    if: github.event_name != 'workflow_dispatch' || inputs.ipq_type == 'all'
-
     steps:
-      - name: Checkout code
+      - name: Check out source
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
-      - name: Show current timezone and time
-        run: |
-          echo "Current timezone: $(timedatectl show -p Timezone --value)"
-          echo "Current time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-
-      - name: Setup Node.js 24
+      - name: Set up Node.js
         uses: actions/setup-node@v6.4.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '24'
 
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ${{ env.DEPENDENCIES }}
+          sudo apt-get install -y build-essential libncurses-dev gawk git gettext libssl-dev python3 wget cpio flex bison bc rsync gzip zopfli device-tree-compiler
+          npm install -g html-minifier-terser clean-css terser svgo
 
-      - name: Install Node.js packages(minifier, css, js, terser, svgo) for Web interface compression
-        run: sudo npm install -g html-minifier-terser clean-css terser svgo
+      - name: Fetch the ARM OpenWrt toolchain
+        run: git clone --depth=1 https://github.com/1980490718/toolchain-arm_cortex-a7_gcc-5.2.0.git ../staging_dir
 
-      - name: Clone Toolchain to staging_dir
-        run: |
-          git clone --depth=1 ${{ env.TOOLCHAIN }} ../staging_dir
-          echo "Clone Toolchain to staging_dir"
-          ls -la ../staging_dir/
-          if [ -d "../staging_dir/toolchain-arm_cortex-a7_gcc-5.2.0_musl-1.1.16_eabi/bin" ]; then
-            echo "Toolchain bin path verified"
-          else
-            echo "Warning: Expected path not found"
-            find ../staging_dir -name "*gcc*" | head -10
-          fi
+      - name: Build Xiaomi BE7000 U-Boot
+        run: ./build.sh ipq9574_xiaomi_be7000
 
-      - name: Build ${{ matrix.ipq_type }} U-Boot
-        if: |
-          ${{ env.SHOULD_RUN_STEP }}
-        run: ./build.sh ${{ matrix.ipq_type }}
-
-      - name: Upload compiled artifacts (bin directory)
-        if: |
-          ${{ env.SHOULD_RUN_STEP }}
+      - name: Upload the BE7000 MBN image
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: u-boot-${{ matrix.ipq_type }}
-          path: bin/
+          name: u-boot-ipq9574_xiaomi_be7000
+          path: bin/openwrt-ipq9574_xiaomi_be7000-u-boot.mbn
+          if-no-files-found: error
           retention-days: 30
-
-      - name: Show bin directory content
-        if: |
-          ${{ env.SHOULD_RUN_STEP }}
-        run: |
-          echo " ${{ matrix.ipq_type }} Build completed!"
-          ls -la bin/ || echo "bin directory is empty"
-
-  release:
-    name: Create Release
-    needs: build
-    if: success() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    env:
-      TZ: Asia/Shanghai
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install GitHub CLI and jq
-        run: |
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt-get update
-          sudo apt-get install -y gh jq
-
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v8.0.1
-        with:
-          path: artifacts
-          pattern: u-boot-*
-          merge-multiple: true
-
-      - name: Confirm current timezone is Asia/Shanghai
-        run: |
-          echo "Current timezone: $(timedatectl show -p Timezone --value)"
-          echo "Current time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-
-      - name: Set TODAY and BUILD_TIME environment variables
-        run: |
-          echo "TODAY=$(date +%Y-%m-%d)" >> $GITHUB_ENV
-          echo "TODAY_ISO=$(date +%Y-%m-%d)" >> $GITHUB_ENV
-          echo "BUILD_TIME=$(date '+%H:%M:%S')" >> $GITHUB_ENV
-          echo "FULL_BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
-          echo "BRANCH_NAME=${GITHUB_REF#refs/heads/}" >> $GITHUB_ENV
-          echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-          echo "BUILD_TIMESTAMP=$(date '+%Y%m%d-%H%M%S')" >> $GITHUB_ENV
-
-      - name: Rename artifacts with branch-date-time suffix
-        run: |
-          cd artifacts
-          SUFFIX="${{ env.BRANCH_NAME }}-${{ env.BUILD_TIMESTAMP }}"
-          for f in *.elf *.mbn; do
-            if [ -f "$f" ]; then
-              BASENAME="${f%.*}"
-              EXT="${f##*.}"
-              NEW_NAME="${BASENAME}-${SUFFIX}.${EXT}"
-              mv "$f" "$NEW_NAME"
-              echo "Renamed: $f -> $NEW_NAME"
-            fi
-          done
-          echo "Final artifact list:"
-          ls -la
-
-      - name: Check and delete all published content on Releases page
-        run: |
-          echo "Check Releases page today (${{ env.TODAY }}) for branch: ${{ env.BRANCH_NAME }}"
-          echo "Current time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-
-          # View all releases for debugging
-          echo "All Releases list:"
-          gh release list --limit 10
-
-          # Match by tag name directly (tag format: branch/vYYYY-MM-DD)
-          # This avoids timezone mismatch between Shanghai date and GitHub UTC createdAt
-          TAG_PREFIX="${{ env.BRANCH_NAME }}/v${{ env.TODAY }}"
-          echo "Looking for tag prefix: $TAG_PREFIX"
-
-          RELEASE_JSON=$(gh release list --limit 100 --json tagName)
-          TODAY_TAGS=$(echo "$RELEASE_JSON" | jq -r --arg prefix "$TAG_PREFIX" '.[] | select(.tagName | startswith($prefix)) | .tagName')
-          echo "Matching tags: $TODAY_TAGS"
-
-          if [ -n "$TODAY_TAGS" ]; then
-            echo "Found published Releases today, deleting all..."
-            echo "$TODAY_TAGS"
-            echo "$TODAY_TAGS" | xargs -I {} gh release delete {} --yes --cleanup-tag
-            echo "All today's Releases deleted completed!"
-          else
-            echo "Releases page today is empty"
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create new GitHub Release
-        uses: softprops/action-gh-release@v3.0.1
-        with:
-          tag_name: ${{ env.BRANCH_NAME }}/v${{ env.TODAY }}
-          name: ${{ env.BRANCH_NAME }}/v${{ env.TODAY }}
-          body: |
-            Branch：`${{ env.BRANCH_NAME }}`
-            Commit：`${{ env.SHORT_SHA }}`
-            Build Time：${{ env.FULL_BUILD_TIME }} ${{ env.TZ }}
-            Types：ipq40xx、ipq5018、ipq5332、ipq6018、ipq806x、ipq807x、ipq9574
-          files: artifacts/*
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
