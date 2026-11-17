@@ -14,7 +14,7 @@
  */
 
 /dts-v1/;
-#include "ipq9574-al02-c1.dts"
+#include "ipq9574-be7000-base.dtsi"
 / {
 	model ="QCA, IPQ9574-AL02-C6";
 	machid = <0x8050001>;

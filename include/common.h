@@ -29,26 +29,8 @@ typedef volatile unsigned char	vu_char;
 #include <pci.h>
 #endif
 
-#if defined(CONFIG_IPQ40XX)
-#include <../board/qca/arm/ipq40xx/ipq40xx.h>
-
-#elif defined(CONFIG_IPQ806X)
-#include <../board/qca/arm/ipq806x/ipq806x.h>
-
-#elif defined(CONFIG_IPQ5018)
-#include <../board/qca/arm/ipq5018/ipq5018.h>
-
-#elif defined(CONFIG_IPQ5332)
-#include <../board/qca/arm/ipq5332/ipq5332.h>
-
-#elif defined(CONFIG_IPQ6018)
-#include <../board/qca/arm/ipq6018/ipq6018.h>
-
-#elif defined(CONFIG_IPQ9574)
+#if defined(CONFIG_IPQ9574)
 #include <../board/qca/arm/ipq9574/ipq9574.h>
-
-#elif defined(CONFIG_IPQ_RUMI)
-#include <../board/qca/arm/ipq807x/ipq807x.h>
 #endif
 
 #if defined(CONFIG_8xx)

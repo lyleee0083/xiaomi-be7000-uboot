@@ -41,8 +41,8 @@ config LIST_FUSE
 	default y
 
 config IPQ9574_XIAOMI_BE7000
-	bool "For IPQ9574 Xiaomi BE7000 support"
-	default n
+	bool
+	default y
 	help
 		Enable support for IPQ9574 Xiaomi BE7000 support
 endif
