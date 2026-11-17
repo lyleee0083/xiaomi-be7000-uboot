@@ -1,231 +1,134 @@
 #include <common.h>
 #include <command.h>
-#include <net.h>
-#ifdef CONFIG_NAND_FLASH
 #include <nand.h>
-#endif
-#include <spi.h>
-#include <spi_flash.h>
-#include <mmc.h>
-#include <part.h>
-#include <sdhci.h>
+#include <net.h>
 #include <asm/errno.h>
+#include <asm/unaligned.h>
 #include <asm/arch-qca-common/smem.h>
 #include <asm/arch-qca-common/qca_common.h>
 #include "fdt_info.h"
 #include "macaddr_modify.h"
 
-#define ART_BASE_SIZE	0x1000
-#define ART_BASE_MAC0	0x0000
-#define ART_MAC_LEN	6
+#define ART_BASE_SIZE		0x1000
+#define ART_PART_SIZE		0x100000
+#define ART_ERASE_SIZE		0x20000
+#define ART_MAC_LEN		6
+#define ART_WIFI_HEADER_SIZE	28
+#define ART_WIFI_VALID_HEADER	1
 
-#if defined(CONFIG_IPQ40XX) || defined(CONFIG_IPQ806X)
-#define ATH10K_WIFI_COUNT	3
-#define ATH10K_CAL_MAC_OFF	6
-#define ATH10K_CAL_CRC		0x02
-#define ATH10K_CAL_CHECKSUM_SIZE	12064
-#else
-#define ART_CAL_SIZE_64K	0x10000
-#define ART_CAL_SIZE_128K	0x20000
-#define ART_CAL_CRC		0x0A
-#define ART_CAL_MAC0		0x0E
-#define WIFI_CAL_BLOCKS		3
-#define WIFI_CAL_MAX_IDX	(WIFI_CAL_BLOCKS * 2)
-#endif
+struct art_wifi_layout {
+	u32 offset;
+	u32 checksum_size;
+	u8 mac_offset;
+	u8 checksum_offset;
+};
 
-#if defined(CONFIG_IPQ40XX) || defined(CONFIG_IPQ806X)
-static const u32 cal_offsets[ATH10K_WIFI_COUNT] = { 0x1000, 0x5000, 0x9000 };
-#else
-static const u32 cal_offsets[WIFI_CAL_BLOCKS] = { 0x1000, 0x26800, 0x4C000 };
-#endif
+static const struct art_wifi_layout wifi_layouts[MACADDR_WIFI_MAX / 2] = {
+	{ 0x01000, 0x20000, 0x0e, 0x0a },
+	{ 0x33000, 0x18800, 0x10, 0x0c },
+	{ 0x65000, 0x18800, 0x10, 0x0c },
+};
 
-#ifdef CONFIG_QCA_MMC
-#ifndef CONFIG_SDHCI_SUPPORT
-extern qca_mmc mmc_host;
-#else
-extern struct sdhci_host mmc_host;
-#endif
-#endif
-
-static u16 xor16_checksum(const void *buf, size_t len) {
-	const u16 *p = buf;
-	u16 cs = 0;
+static u16 xor16_checksum(const void *buf, size_t len)
+{
+	const u16 *words = buf;
+	u16 checksum = 0;
 	size_t i;
+
 	for (i = 0; i < len / 2; i++)
-		cs ^= le16_to_cpu(p[i]);
-	return cs;
+		checksum ^= le16_to_cpu(words[i]);
+	return checksum;
 }
 
-#if !defined(CONFIG_IPQ40XX) && !defined(CONFIG_IPQ806X)
-static size_t art_cal_size(const u8 *hdr) {
-	if (hdr[9] == 0x80)
-		return ART_CAL_SIZE_128K;
-	return ART_CAL_SIZE_64K;
-}
-#endif
-
-static int is_nor_flash(uint32_t type) {
-	return type == SMEM_BOOT_NOR_FLASH || type == SMEM_BOOT_SPI_FLASH ||
-		   type == SMEM_BOOT_NORPLUSNAND || type == SMEM_BOOT_NORPLUSEMMC;
-}
-
-static int is_nand_flash(uint32_t type) {
-	return type == SMEM_BOOT_NAND_FLASH || type == SMEM_BOOT_QSPI_NAND_FLASH;
-}
-
-static loff_t art_part_offset(void) {
-	qca_smem_flash_info_t *sfi = &qca_smem_flash_info;
+static loff_t art_part_offset(void)
+{
 	u32 start_blocks, size_blocks;
 
 	if (smem_getpart("0:ART", &start_blocks, &size_blocks) < 0)
 		return -1;
 
-	return (loff_t)sfi->flash_block_size * start_blocks;
+	return (loff_t)qca_smem_flash_info.flash_block_size * start_blocks;
 }
 
-static int art_read(loff_t offset, size_t size, void *buf) {
-	qca_smem_flash_info_t *sfi = &qca_smem_flash_info;
+static int art_read(loff_t offset, size_t size, void *buf)
+{
+	struct mtd_info *mtd = &nand_info[CONFIG_NAND_FLASH_INFO_IDX];
+	u32 flash_type = qca_smem_flash_info.flash_type;
+	size_t read_len;
 	loff_t base;
 	int ret;
 
-#ifdef CONFIG_QCA_MMC
-	if (sfi->flash_type == SMEM_BOOT_MMC_FLASH) {
-		block_dev_desc_t *blk_dev = mmc_get_dev(mmc_host.dev_num);
-		disk_partition_t disk_info;
-		struct mmc *mmc;
-		u32 blk_off, blk_cnt, intra, i;
-		u8 *blk_buf;
-		if (!blk_dev)
-			return -ENODEV;
-		ret = get_partition_info_efi_by_name(blk_dev, "0:ART", &disk_info);
-		if (ret < 0)
-			return ret;
-		mmc = mmc_host.mmc;
-		intra = offset % blk_dev->blksz;
-		blk_off = disk_info.start + (offset / blk_dev->blksz);
-		blk_cnt = (intra + size + blk_dev->blksz - 1) / blk_dev->blksz;
-		blk_buf = memalign(ARCH_DMA_MINALIGN, blk_dev->blksz);
-		if (!blk_buf)
-			return -ENOMEM;
-		for (i = 0; i < blk_cnt; i++) {
-			u32 skip = (i == 0) ? intra : 0;
-			u32 dst_off = (i == 0) ? 0 : i * blk_dev->blksz - intra;
-			u32 copy_len = min((u32)size - dst_off, (u32)blk_dev->blksz - skip);
-			ret = mmc->block_dev.block_read(mmc_host.dev_num, blk_off + i, 1, blk_buf);
-			if (ret < 0)
-				break;
-			memcpy(buf + dst_off, blk_buf + skip, copy_len);
-		}
-		free(blk_buf);
-		return (ret < 0) ? ret : 0;
-	}
-#endif
+	if (flash_type != SMEM_BOOT_NAND_FLASH &&
+	    flash_type != SMEM_BOOT_QSPI_NAND_FLASH)
+		return -EINVAL;
+	if (offset < 0 || offset > ART_PART_SIZE ||
+	    size > ART_PART_SIZE - offset)
+		return -EINVAL;
 
 	base = art_part_offset();
-	if (base < 0)
-		return -ENOENT;
-
-	if (is_nor_flash(sfi->flash_type)) {
-		struct spi_flash *flash = spi_flash_probe(CONFIG_SF_DEFAULT_BUS, CONFIG_SF_DEFAULT_CS, CONFIG_SF_DEFAULT_SPEED, CONFIG_SF_DEFAULT_MODE);
-		if (!flash)
-			return -ENODEV;
-		ret = spi_flash_read(flash, base + offset, size, buf);
-	} else if (is_nand_flash(sfi->flash_type)) {
-#if defined(CONFIG_NAND_FLASH)
-#if defined(CONFIG_IPQ40XX) || defined(CONFIG_IPQ806X)
-		int idx = is_spi_nand_available();
-#else
-		int idx = CONFIG_NAND_FLASH_INFO_IDX;
-#endif
-		size_t len = size;
-		ret = nand_read(&nand_info[idx], base + offset, &len, buf);
-		if (len != size)
-			ret = -EIO;
-#else
+	if (base < 0 || base > 0xffffffffLL)
 		return -EINVAL;
-#endif
-	} else {
-		return -EINVAL;
-	}
 
-	return ret;
+	ret = mtd_read(mtd, base + offset, size, &read_len, buf);
+	if (ret < 0 && !mtd_is_bitflip(ret))
+		return ret;
+
+	return read_len == size ? 0 : -EIO;
 }
 
-static int art_write(loff_t offset, size_t size, const void *buf) {
-	qca_smem_flash_info_t *sfi = &qca_smem_flash_info;
-	loff_t base;
+static int art_write(loff_t offset, size_t size, const void *buf)
+{
+	struct mtd_info *mtd = &nand_info[CONFIG_NAND_FLASH_INFO_IDX];
+	struct erase_info erase = { 0 };
+	loff_t base, block_offset;
+	size_t in_block, written;
+	u8 *block;
 	int ret;
 
-#ifdef CONFIG_QCA_MMC
-	if (sfi->flash_type == SMEM_BOOT_MMC_FLASH) {
-		block_dev_desc_t *blk_dev = mmc_get_dev(mmc_host.dev_num);
-		disk_partition_t disk_info;
-		struct mmc *mmc;
-		u32 blk_off, blk_cnt, i;
-		u8 *blk_buf;
-		if (!blk_dev)
-			return -ENODEV;
-		ret = get_partition_info_efi_by_name(blk_dev, "0:ART", &disk_info);
-		if (ret < 0)
-			return ret;
-		mmc = mmc_host.mmc;
-		blk_off = disk_info.start + (offset / blk_dev->blksz);
-		blk_cnt = (size + blk_dev->blksz - 1) / blk_dev->blksz;
-		blk_buf = memalign(ARCH_DMA_MINALIGN, blk_dev->blksz);
-		if (!blk_buf)
-			return -ENOMEM;
-		for (i = 0; i < blk_cnt; i++) {
-			u32 byte_off = i * blk_dev->blksz;
-			u32 copy_len = min((u32)size - byte_off, (u32)blk_dev->blksz);
-			memset(blk_buf, 0xFF, blk_dev->blksz);
-			memcpy(blk_buf, buf + byte_off, copy_len);
-			ret = mmc->block_dev.block_write(mmc_host.dev_num,
-				blk_off + i, 1, blk_buf);
-			if (ret < 0)
-				break;
-		}
-		free(blk_buf);
-		return (ret < 0) ? ret : 0;
-	}
-#endif
+	if (offset < 0 || offset >= ART_PART_SIZE || !size ||
+	    mtd->erasesize != ART_ERASE_SIZE)
+		return -EINVAL;
 
+	in_block = (size_t)offset % ART_ERASE_SIZE;
+	if (size > ART_ERASE_SIZE - in_block)
+		return -EINVAL;
+	block_offset = offset - in_block;
+
+	/* Preserve the other ART data in the NAND erase block. */
+	block = memalign(ARCH_DMA_MINALIGN, ART_ERASE_SIZE);
+	if (!block)
+		return -EINVAL;
+	ret = art_read(block_offset, ART_ERASE_SIZE, block);
+	if (ret < 0)
+		goto out;
+
+	memcpy(block + in_block, buf, size);
 	base = art_part_offset();
-	if (base < 0)
-		return -ENOENT;
-
-	if (is_nor_flash(sfi->flash_type)) {
-		struct spi_flash *flash = spi_flash_probe(
-			CONFIG_SF_DEFAULT_BUS, CONFIG_SF_DEFAULT_CS,
-			CONFIG_SF_DEFAULT_SPEED, CONFIG_SF_DEFAULT_MODE);
-		size_t erase_size;
-		if (!flash)
-			return -ENODEV;
-		erase_size = (size + flash->sector_size - 1) & ~(flash->sector_size - 1);
-		ret = spi_flash_erase(flash, base + offset, erase_size);
-		if (ret < 0)
-			return ret;
-		ret = spi_flash_write(flash, base + offset, size, buf);
-	} else if (is_nand_flash(sfi->flash_type)) {
-#if defined(CONFIG_NAND_FLASH)
-#if defined(CONFIG_IPQ40XX) || defined(CONFIG_IPQ806X)
-		int idx = is_spi_nand_available();
-#else
-		int idx = CONFIG_NAND_FLASH_INFO_IDX;
-#endif
-		size_t len = size;
-		ret = nand_erase(&nand_info[idx], base + offset, size);
-		if (ret < 0)
-			return ret;
-		ret = nand_write(&nand_info[idx], base + offset, &len, (u_char *)buf);
-		if (len != size)
-			ret = -EIO;
-#else
-		return -EINVAL;
-#endif
-	} else {
-		return -EINVAL;
+	if (base < 0 || base > 0xffffffffLL) {
+		ret = -EINVAL;
+		goto out;
 	}
 
+	erase.mtd = mtd;
+	erase.addr = base + block_offset;
+	erase.len = ART_ERASE_SIZE;
+	ret = mtd_erase(mtd, &erase);
+	if (ret < 0)
+		goto out;
+
+	ret = mtd_write(mtd, erase.addr, ART_ERASE_SIZE, &written, block);
+	if (ret < 0)
+		goto out;
+	if (written != ART_ERASE_SIZE) {
+		ret = -EIO;
+		goto out;
+	}
+
+	ret = art_read(block_offset, ART_ERASE_SIZE, block);
+	if (!ret && memcmp(block + in_block, buf, size))
+		ret = -EIO;
+out:
+	free(block);
 	return ret;
 }
 
@@ -242,7 +145,7 @@ int macaddr_read_base(u8 *mac, int mac_index) {
 
 	ret = art_read(0, ART_BASE_SIZE, buf);
 	if (ret >= 0)
-		memcpy(mac, &buf[ART_BASE_MAC0 + mac_index * ART_MAC_LEN], ART_MAC_LEN);
+		memcpy(mac, &buf[mac_index * ART_MAC_LEN], ART_MAC_LEN);
 
 	free(buf);
 	return ret;
@@ -264,7 +167,7 @@ int macaddr_modify_base(const u8 *new_mac, int mac_index) {
 	if (ret < 0)
 		goto out;
 
-	memcpy(&buf[ART_BASE_MAC0 + mac_index * ART_MAC_LEN], new_mac, ART_MAC_LEN);
+	memcpy(&buf[mac_index * ART_MAC_LEN], new_mac, ART_MAC_LEN);
 
 	ret = art_write(0, ART_BASE_SIZE, buf);
 out:
@@ -272,233 +175,117 @@ out:
 	return ret;
 }
 
-#if defined(CONFIG_IPQ40XX) || defined(CONFIG_IPQ806X)
-int macaddr_read_wifi(u8 *mac, int wifi_index) {
-	u8 hdr[2], *cal;
-	u16 cal_size;
+static const struct art_wifi_layout *art_wifi_layout(int index)
+{
+	if (index < 0 || index >= MACADDR_WIFI_MAX)
+		return NULL;
+	return &wifi_layouts[index / 2];
+}
+
+static size_t art_wifi_mac_offset(const struct art_wifi_layout *layout, int index)
+{
+	return layout->mac_offset + (index % 2) * ART_MAC_LEN;
+}
+
+int macaddr_read_wifi(u8 *mac, int wifi_index)
+{
+	const struct art_wifi_layout *layout = art_wifi_layout(wifi_index);
+	u8 version;
 	int ret;
 
-	if (!mac || wifi_index < 0 || wifi_index >= ATH10K_WIFI_COUNT)
+	if (!layout || !mac)
 		return -EINVAL;
 
-	ret = art_read(cal_offsets[wifi_index], sizeof(hdr), hdr);
+	ret = art_read(layout->offset, sizeof(version), &version);
 	if (ret < 0)
 		return ret;
+	if (version != ART_WIFI_VALID_HEADER)
+		return -EINVAL;
 
-	cal_size = hdr[0] | (hdr[1] << 8);
-	if (cal_size == 0xFFFF || cal_size == 0 || cal_size > 0x10000)
-		return -ENODATA;
-
-	cal = memalign(ARCH_DMA_MINALIGN, cal_size);
-	if (!cal)
-		return -ENOMEM;
-
-	ret = art_read(cal_offsets[wifi_index], cal_size, cal);
-	if (ret >= 0)
-		memcpy(mac, &cal[ATH10K_CAL_MAC_OFF], ART_MAC_LEN);
-
-	free(cal);
-	return ret;
+	return art_read(layout->offset + art_wifi_mac_offset(layout, wifi_index),
+			ART_MAC_LEN, mac);
 }
 
-int macaddr_modify_wifi(const u8 *new_mac, int wifi_index) {
-	u8 hdr[2], *cal;
-	u16 cal_size, cs;
+int macaddr_modify_wifi(const u8 *new_mac, int wifi_index)
+{
+	const struct art_wifi_layout *layout = art_wifi_layout(wifi_index);
+	u8 header[ART_WIFI_HEADER_SIZE];
+	u8 *mac, *checksum_field;
+	u16 checksum;
+	size_t i;
 	int ret;
 
-	if (!new_mac || !is_valid_ethaddr(new_mac) ||
-	    wifi_index < 0 || wifi_index >= ATH10K_WIFI_COUNT)
+	if (!layout || !new_mac || !is_valid_ethaddr(new_mac) ||
+	    !macaddr_wifi_cs_valid(wifi_index))
 		return -EINVAL;
 
-	ret = art_read(cal_offsets[wifi_index], sizeof(hdr), hdr);
+	ret = art_read(layout->offset, sizeof(header), header);
 	if (ret < 0)
 		return ret;
 
-	cal_size = hdr[0] | (hdr[1] << 8);
-	if (cal_size == 0xFFFF || cal_size == 0 || cal_size > 0x10000)
-		return -ENODATA;
+	mac = header + art_wifi_mac_offset(layout, wifi_index);
+	checksum_field = header + layout->checksum_offset;
+	checksum = get_unaligned_le16(checksum_field);
+	/* Replace the old MAC words in the verified XOR16 checksum. */
+	for (i = 0; i < ART_MAC_LEN; i += sizeof(u16))
+		checksum ^= get_unaligned_le16(mac + i) ^
+			    get_unaligned_le16(new_mac + i);
 
-	cal = memalign(ARCH_DMA_MINALIGN, ATH10K_CAL_CHECKSUM_SIZE);
-	if (!cal)
-		return -ENOMEM;
-
-	ret = art_read(cal_offsets[wifi_index], ATH10K_CAL_CHECKSUM_SIZE, cal);
-	if (ret < 0)
-		goto out;
-
-	cs = xor16_checksum(cal, ATH10K_CAL_CHECKSUM_SIZE);
-	if (cs != 0xFFFF)
-		printf("ART cal XOR16 mismatch (0x%04X), updating anyway\n", cs);
-
-	memcpy(&cal[ATH10K_CAL_MAC_OFF], new_mac, ART_MAC_LEN);
-
-	*(u16 *)&cal[ATH10K_CAL_CRC] = cpu_to_le16(0xFFFF);
-	cs = xor16_checksum(cal, ATH10K_CAL_CHECKSUM_SIZE);
-	*(u16 *)&cal[ATH10K_CAL_CRC] = cpu_to_le16(cs);
-
-	ret = art_write(cal_offsets[wifi_index], ATH10K_CAL_CHECKSUM_SIZE, cal);
-out:
-	free(cal);
-	return ret;
+	put_unaligned_le16(checksum, checksum_field);
+	memcpy(mac, new_mac, ART_MAC_LEN);
+	return art_write(layout->offset, sizeof(header), header);
 }
-#else
-int macaddr_read_wifi(u8 *mac, int wifi_index) {
-	u8 hdr[16], *cal;
-	size_t cal_size;
-	u32 cal_off;
-	int mac_off, ret;
-
-	if (!mac || wifi_index < 0 || wifi_index >= WIFI_CAL_MAX_IDX)
-		return -EINVAL;
-
-	cal_off = cal_offsets[wifi_index / 2];
-	mac_off = ART_CAL_MAC0 + (wifi_index % 2) * ART_MAC_LEN;
-
-	ret = art_read(cal_off, sizeof(hdr), hdr);
-	if (ret < 0)
-		return ret;
-
-	if (hdr[0] != 0x01)
-		return -ENOSYS;
-
-	cal_size = art_cal_size(hdr);
-
-	cal = memalign(ARCH_DMA_MINALIGN, cal_size);
-	if (!cal)
-		return -ENOMEM;
-
-	ret = art_read(cal_off, cal_size, cal);
-	if (ret >= 0)
-		memcpy(mac, &cal[mac_off], ART_MAC_LEN);
-
-	free(cal);
-	return ret;
-}
-
-int macaddr_modify_wifi(const u8 *new_mac, int wifi_index) {
-	u8 hdr[16], *cal;
-	size_t cal_size;
-	u32 cal_off;
-	int mac_off;
-	u16 cs;
-	int ret;
-
-	if (!new_mac || !is_valid_ethaddr(new_mac) ||
-	    wifi_index < 0 || wifi_index >= WIFI_CAL_MAX_IDX)
-		return -EINVAL;
-
-	cal_off = cal_offsets[wifi_index / 2];
-	mac_off = ART_CAL_MAC0 + (wifi_index % 2) * ART_MAC_LEN;
-
-	ret = art_read(cal_off, sizeof(hdr), hdr);
-	if (ret < 0)
-		return ret;
-
-	if (hdr[0] != 0x01)
-		return -ENOSYS;
-
-	cal_size = art_cal_size(hdr);
-
-	cal = memalign(ARCH_DMA_MINALIGN, cal_size);
-	if (!cal)
-		return -ENOMEM;
-
-	ret = art_read(cal_off, cal_size, cal);
-	if (ret < 0)
-		goto out;
-
-	memset(&cal[ART_CAL_CRC], 0, 2);
-	cs = xor16_checksum(cal, cal_size);
-	if (cs != 0xFFFF)
-		printf("ART cal XOR16 mismatch (0x%04X), updating anyway\n", cs);
-
-	memcpy(&cal[mac_off], new_mac, ART_MAC_LEN);
-
-	memset(&cal[ART_CAL_CRC], 0, 2);
-	cs = xor16_checksum(cal, cal_size);
-	*(u16 *)&cal[ART_CAL_CRC] = cpu_to_le16(cs ^ 0xFFFF);
-
-	ret = art_write(cal_off, cal_size, cal);
-out:
-	free(cal);
-	return ret;
-}
-#endif
 
 static void print_mac(const char *name, const u8 *mac) {
 	printf("%s: %02X:%02X:%02X:%02X:%02X:%02X\n", name, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
-u32 macaddr_wifi_offset(int wifi_index) {
-	if (wifi_index < 0 || wifi_index >= MACADDR_WIFI_MAX)
+u32 macaddr_wifi_offset(int wifi_index)
+{
+	const struct art_wifi_layout *layout = art_wifi_layout(wifi_index);
+
+	if (!layout)
 		return 0;
-#if defined(CONFIG_IPQ40XX) || defined(CONFIG_IPQ806X)
-	return cal_offsets[wifi_index] + ATH10K_CAL_MAC_OFF;
-#else
-	return cal_offsets[wifi_index / 2] + ART_CAL_MAC0 + (wifi_index % 2) * ART_MAC_LEN;
-#endif
+	return layout->offset + art_wifi_mac_offset(layout, wifi_index);
 }
 
-u32 macaddr_wifi_cs_offset(int wifi_index) {
-	if (wifi_index < 0 || wifi_index >= MACADDR_WIFI_MAX)
+u32 macaddr_wifi_cs_offset(int wifi_index)
+{
+	const struct art_wifi_layout *layout = art_wifi_layout(wifi_index);
+
+	if (!layout)
 		return 0;
-#if defined(CONFIG_IPQ40XX) || defined(CONFIG_IPQ806X)
-	return cal_offsets[wifi_index];
-#else
-	return cal_offsets[wifi_index / 2] + ART_CAL_CRC;
-#endif
+	return layout->offset + layout->checksum_offset;
 }
 
-u16 macaddr_wifi_checksum(int wifi_index) {
+u16 macaddr_wifi_checksum(int wifi_index)
+{
 	u8 buf[2];
-	u32 off = macaddr_wifi_cs_offset(wifi_index);
-	if (wifi_index < 0 || wifi_index >= MACADDR_WIFI_MAX || art_read(off, 2, buf) < 0)
+	u32 offset = macaddr_wifi_cs_offset(wifi_index);
+
+	if (!offset || art_read(offset, sizeof(buf), buf) < 0)
 		return 0;
 	return (buf[0] << 8) | buf[1];
 }
 
-int macaddr_wifi_cs_valid(int wifi_index) {
-	u8 *cal;
-	int ret;
-#if defined(CONFIG_IPQ40XX) || defined(CONFIG_IPQ806X)
-	u32 cal_off = cal_offsets[wifi_index];
-#else
-	u8 hdr[16];
-	size_t cal_size;
-	u32 cal_off = cal_offsets[wifi_index / 2];
-#endif
+int macaddr_wifi_cs_valid(int wifi_index)
+{
+	const struct art_wifi_layout *layout = art_wifi_layout(wifi_index);
+	u8 header[16], *cal;
+	int valid;
 
-	if (wifi_index < 0 || wifi_index >= MACADDR_WIFI_MAX)
+	if (!layout || art_read(layout->offset, sizeof(header), header) < 0 ||
+	    header[0] != ART_WIFI_VALID_HEADER)
 		return 0;
 
-#if defined(CONFIG_IPQ40XX) || defined(CONFIG_IPQ806X)
-	cal = memalign(ARCH_DMA_MINALIGN, ATH10K_CAL_CHECKSUM_SIZE);
+	cal = memalign(ARCH_DMA_MINALIGN, layout->checksum_size);
 	if (!cal)
 		return 0;
-	ret = art_read(cal_off, ATH10K_CAL_CHECKSUM_SIZE, cal);
-	if (ret < 0) {
-		free(cal);
-		return 0;
-	}
-	ret = xor16_checksum(cal, ATH10K_CAL_CHECKSUM_SIZE) == 0xFFFF;
+
+	valid = art_read(layout->offset, layout->checksum_size, cal) == 0 &&
+		xor16_checksum(cal, layout->checksum_size) == 0xffff;
 	free(cal);
-#else
-	ret = art_read(cal_off, sizeof(hdr), hdr);
-	if (ret < 0 || hdr[0] != 0x01)
-		return 0;
-	cal_size = art_cal_size(hdr);
-	cal = memalign(ARCH_DMA_MINALIGN, cal_size);
-	if (!cal)
-		return 0;
-	ret = art_read(cal_off, cal_size, cal);
-	if (ret < 0) {
-		free(cal);
-		return 0;
-	}
-	ret = xor16_checksum(cal, cal_size) == 0xFFFF;
-	free(cal);
-#endif
-	return ret;
+	return valid;
 }
 
 static int parse_iface(const char *arg, int *type, int *index) {
