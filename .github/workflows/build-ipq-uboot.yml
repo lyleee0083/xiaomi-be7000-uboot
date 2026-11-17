@@ -48,14 +48,8 @@ jobs:
         run: ./build.sh ipq9574_xiaomi_be7000
 
       - name: Record ART/MAC symbol addresses
-        run: grep -E ' (__rel_dyn_start|__rel_dyn_end|macaddr_(read|modify)_(base|wifi)|macaddr_wifi_(offset|cs_offset|checksum|cs_valid)|memalign|free|mtd_(read|write|erase)|smem_getpart|qca_smem_flash_info|nand_info)
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: u-boot-ipq9574_xiaomi_be7000
-          path: bin/openwrt-ipq9574_xiaomi_be7000-u-boot.mbn
-          if-no-files-found: error
-          retention-days: 30
- System.map
+        run: |
+          grep -E ' (__rel_dyn_start|__rel_dyn_end|macaddr_(read|modify)_(base|wifi)|macaddr_wifi_(offset|cs_offset|checksum|cs_valid)|memalign|free|mtd_(read|write|erase)|smem_getpart|qca_smem_flash_info|nand_info)$' System.map
 
       - name: Upload the BE7000 MBN image
         uses: actions/upload-artifact@v7.0.1
