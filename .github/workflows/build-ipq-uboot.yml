@@ -49,7 +49,7 @@ jobs:
 
       - name: Record ART/MAC symbol addresses
         run: |
-          grep -E ' (__rel_dyn_start|__rel_dyn_end|macaddr_(read|modify)_(base|wifi)|macaddr_wifi_(offset|cs_offset|checksum|cs_valid)|memalign|free|mtd_(read|write|erase)|smem_getpart|qca_smem_flash_info|nand_info)$' System.map
+          awk '$1 ~ /^0x[[:xdigit:]]+$/ && $2 ~ /^(__rel_dyn_start|__rel_dyn_end|macaddr_(read|modify)_(base|wifi)|macaddr_wifi_(offset|cs_offset|checksum|cs_valid)|memalign|free|mtd_(read|write|erase)|smem_getpart|qca_smem_flash_info|nand_info)$/ { print $1, $2 }' u-boot.map
 
       - name: Upload the BE7000 MBN image
         uses: actions/upload-artifact@v7.0.1
