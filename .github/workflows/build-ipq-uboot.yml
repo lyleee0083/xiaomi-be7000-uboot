@@ -67,7 +67,7 @@ jobs:
       - name: Upload the BE7000 MBN image
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: u-boot-ipq9574_xiaomi_be7000-${{ env.ARTIFACT_VERSION }}
           path: bin/openwrt-ipq9574_xiaomi_be7000-u-boot-${{ env.ARTIFACT_VERSION }}.mbn
           if-no-files-found: error
+          archive: false
           retention-days: 30
