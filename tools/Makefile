@@ -65,7 +65,18 @@ RSA_OBJS-$(CONFIG_FIT_SIGNATURE) := $(addprefix lib/rsa/, \
 					rsa-sign.o rsa-verify.o rsa-checksum.o \
 					rsa-mod-exp.o)
 
-RK_OBJS-$(CONFIG_ARCH_ROCKCHIP) := lib/rc4.o
+AIS_OBJS-$(CONFIG_ARCH_DAVINCI) := aisimage.o
+ATMEL_OBJS-$(CONFIG_ARCH_AT91) := atmelimage.o
+IMX_OBJS-$(CONFIG_MX23)$(CONFIG_MX28)$(CONFIG_ARCH_MX5)$(CONFIG_ARCH_MX6)$(CONFIG_ARCH_MX7)$(CONFIG_ARCH_VF610) := imximage.o
+KWB_OBJS-$(CONFIG_KIRKWOOD)$(CONFIG_ARMADA_XP) := kwbimage.o
+LPC32XX_OBJS-$(CONFIG_LPC32XX) := lpc32xximage.o
+MXS_OBJS-$(CONFIG_MX23)$(CONFIG_MX28) := mxsimage.o
+OMAP_OBJS-$(CONFIG_OMAP34XX)$(CONFIG_OMAP44XX) := omapimage.o
+SOCFPGA_OBJS-$(CONFIG_ARCH_SOCFPGA) := socfpgaimage.o
+UBL_OBJS-$(CONFIG_ARCH_DAVINCI) := ublimage.o
+ZYNQ_OBJS-$(CONFIG_ARCH_ZYNQ) := zynqimage.o
+GP_OBJS-$(CONFIG_ARCH_KEYSTONE) := gpimage.o gpimage-common.o
+RK_OBJS-$(CONFIG_ARCH_ROCKCHIP) := rkcommon.o rkimage.o rksd.o rkspi.o lib/rc4.o
 
 # common objs for dumpimage and mkimage
 dumpimage-mkimage-objs := $(AIS_OBJS-y) \

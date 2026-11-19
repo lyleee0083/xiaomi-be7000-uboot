@@ -8,3 +8,4 @@
 # SPDX-License-Identifier:	GPL-2.0+
 #
 
+obj-$(CONFIG_ALTERA_SDRAM) += sdram.o sequencer.o

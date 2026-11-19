@@ -5,3 +5,5 @@
 # SPDX-License-Identifier:	GPL-2.0+
 #
 
+obj-$(CONFIG_POWER_BATTERY_TRATS) += bat_trats.o
+obj-$(CONFIG_POWER_BATTERY_TRATS2) += bat_trats2.o
