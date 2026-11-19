@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  ARTIFACT_VERSION: '0.0.2'
+  ARTIFACT_VERSION: '0.0.3'
   APT_SNAPSHOT: '20261118T000000Z'
 
 jobs:
@@ -46,7 +46,7 @@ jobs:
 
       - name: Record ART/MAC symbol addresses
         run: |
-          awk '$1 ~ /^0x[[:xdigit:]]+$/ && $2 ~ /^(__rel_dyn_start|__rel_dyn_end|macaddr_(read|modify)_(base|wifi)|macaddr_wifi_(offset|cs_offset|checksum|cs_valid)|memalign|free|mtd_(read|write|erase)|smem_getpart|qca_smem_flash_info|nand_info)$/ { print $1, $2 }' u-boot.map
+          awk '$1 ~ /^0x[[:xdigit:]]+$/ && $2 ~ /^(__rel_dyn_start|__rel_dyn_end|macaddr_(read|modify)_(base|wifi)|macaddr_wifi_(offset|cs_offset|checksum|cs_valid)|memalign|free|macaddr_restore_art_image|mtd_(read|write|erase|block_isbad)|smem_getpart|qca_smem_flash_info|nand_info)$/ { print $1, $2 }' u-boot.map
 
       - name: Add the build version to the MBN filename
         shell: bash

@@ -93,12 +93,36 @@ static int art_read(u64 offset, size_t size, void *buf)
 	return art_read_region(&region, offset, size, buf);
 }
 
+/* offset is a full erase block already validated against region->size. */
+static int art_write_block(const struct art_region *region, u64 offset,
+			   const void *block, void *readback)
+{
+	struct erase_info erase = { 0 };
+	size_t written;
+	int ret;
+
+	erase.mtd = region->mtd;
+	erase.addr = region->base + offset;
+	erase.len = ART_ERASE_SIZE;
+	ret = mtd_erase(region->mtd, &erase);
+	if (ret)
+		return ret;
+	ret = mtd_write(region->mtd, erase.addr, ART_ERASE_SIZE, &written, block);
+	if (ret)
+		return ret;
+	if (written != ART_ERASE_SIZE)
+		return -EIO;
+	ret = art_read_region(region, offset, ART_ERASE_SIZE, readback);
+	if (!ret && memcmp(block, readback, ART_ERASE_SIZE))
+		ret = -EIO;
+	return ret;
+}
+
 static int art_write(u64 offset, size_t size, const void *buf)
 {
 	struct art_region region;
-	struct erase_info erase = { 0 };
 	u64 block_offset;
-	size_t in_block, written;
+	size_t in_block;
 	u8 *block, *readback;
 	int ret;
 
@@ -120,24 +144,7 @@ static int art_write(u64 offset, size_t size, const void *buf)
 		goto out;
 
 	memcpy(block + in_block, buf, size);
-	erase.mtd = region.mtd;
-	erase.addr = region.base + block_offset;
-	erase.len = ART_ERASE_SIZE;
-	ret = mtd_erase(region.mtd, &erase);
-	if (ret)
-		goto out;
-
-	ret = mtd_write(region.mtd, erase.addr, ART_ERASE_SIZE, &written, block);
-	if (ret)
-		goto out;
-	if (written != ART_ERASE_SIZE) {
-		ret = -EIO;
-		goto out;
-	}
-
-	ret = art_read_region(&region, block_offset, ART_ERASE_SIZE, readback);
-	if (!ret && memcmp(block, readback, ART_ERASE_SIZE))
-		ret = -EIO;
+	ret = art_write_block(&region, block_offset, block, readback);
 out:
 	free(block);
 	return ret;
@@ -150,18 +157,14 @@ static int art_wifi_data_valid(const struct art_wifi_layout *layout,
 		xor16_checksum(data, layout->checksum_size) == 0xffff;
 }
 
-int macaddr_validate_art_image(const void *image, size_t size)
+static int art_image_valid(const struct art_region *region, const u8 *bytes,
+			   size_t size)
 {
-	struct art_region region;
-	const u8 *bytes = image;
 	size_t i;
-	int ret = art_get_region(&region);
 
-	if (ret)
-		return ret;
-	if (!bytes || size != region.size || size < ART_BASE_SIZE ||
+	if (!bytes || size != region->size || size < ART_BASE_SIZE ||
 	    !is_valid_ethaddr(bytes))
-		return -EINVAL;
+		return 0;
 
 	for (i = 0; i < ARRAY_SIZE(wifi_layouts); i++) {
 		const struct art_wifi_layout *layout = &wifi_layouts[i];
@@ -169,9 +172,44 @@ int macaddr_validate_art_image(const void *image, size_t size)
 		if (layout->offset > size ||
 		    layout->checksum_size > size - layout->offset ||
 		    !art_wifi_data_valid(layout, bytes + layout->offset))
-			return -EINVAL;
+			return 0;
 	}
-	return 0;
+	return 1;
+}
+
+int macaddr_restore_art_image(const void *image, size_t size)
+{
+	struct art_region region;
+	const u8 *bytes = image;
+	void *readback;
+	size_t offset;
+	int ret = art_get_region(&region);
+
+	if (ret)
+		return ret;
+	if (!art_image_valid(&region, bytes, size)) {
+		printf("ART image does not match the partition or BE7000 calibration layout\n");
+		return -EINVAL;
+	}
+
+	/* Never skip bad NAND blocks. ART offsets are physical and calibration
+	 * data must not shift or be written beyond this partition. */
+	for (offset = 0; offset < size; offset += ART_ERASE_SIZE) {
+		ret = mtd_block_isbad(region.mtd, region.base + offset);
+		if (ret)
+			return ret < 0 ? ret : -EIO;
+	}
+
+	readback = memalign(ARCH_DMA_MINALIGN, ART_ERASE_SIZE);
+	if (!readback)
+		return -ENOMEM;
+	for (offset = 0; offset < size; offset += ART_ERASE_SIZE) {
+		ret = art_write_block(&region, offset, bytes + offset, readback);
+		if (ret)
+			break;
+	}
+	free(readback);
+	return ret;
 }
 
 int macaddr_read_base(u8 *mac, int mac_index) {

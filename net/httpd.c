@@ -436,37 +436,8 @@ static int do_uboot_upgrade(const ulong size) {
 }
 
 static int do_art_upgrade(const ulong size) {
-	char buf[576];
-	uint32_t flash_type;
-	if (get_current_flash_type(&flash_type) != 0)
-		return -1;
-	if (macaddr_validate_art_image((const void *)UPLOAD_ADDR, size)) {
-		printf("\n* ART image does not match the partition or BE7000 calibration layout *\n");
-		return -1;
-	}
-	int fw_type = check_fw_type((void *)UPLOAD_ADDR);
-	if (fw_type == FW_TYPE_CDT || fw_type == FW_TYPE_ELF || fw_type == FW_TYPE_GPT || fw_type == FW_TYPE_MIBIB) {
-		printf("\n* The %s type is not allowed to upgrade to the ART partition *\n", fw_type_to_string(fw_type));
-		return -1;
-	}
 	print_upgrade_warning("ART");
-	switch (flash_type) {
-		case SMEM_BOOT_MMC_FLASH:
-			sprintf(buf, "mw 0x%lx 0x00 0x200 && mmc dev 0 && flash %s 0x%lx $filesize", UPLOAD_ADDR + size, ART_NAME, UPLOAD_ADDR);
-			break;
-		case SMEM_BOOT_NAND_FLASH:
-		case SMEM_BOOT_SPI_FLASH:
-		case SMEM_BOOT_NOR_FLASH:
-		case SMEM_BOOT_QSPI_NAND_FLASH:
-		case SMEM_BOOT_NORPLUSEMMC:
-		case SMEM_BOOT_NORPLUSNAND:
-			sprintf(buf, "flash %s 0x%lx $filesize", ART_NAME, UPLOAD_ADDR);
-			break;
-		default:
-			printf("\n* Unsupported flash type for ART *\n");
-			return -1;
-	}
-	return execute_command(buf);
+	return macaddr_restore_art_image((const void *)UPLOAD_ADDR, size);
 }
 
 static int do_gpt_upgrade(const ulong size) {

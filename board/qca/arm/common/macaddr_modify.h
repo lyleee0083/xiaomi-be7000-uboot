@@ -11,7 +11,7 @@ u32 macaddr_wifi_offset(int wifi_index);
 u32 macaddr_wifi_cs_offset(int wifi_index);
 u16 macaddr_wifi_checksum(int wifi_index);
 int macaddr_wifi_cs_valid(int wifi_index);
-int macaddr_validate_art_image(const void *image, size_t size);
+int macaddr_restore_art_image(const void *image, size_t size);
 
 #define MACADDR_WIFI_MAX	6
 
