@@ -107,6 +107,7 @@ tools/mbn_tools.pyc
 # failsafe generated files
 failsafe/fsdata.c
 failsafe/html/debug_output/
+failsafe/html/node_modules/
 failsafe/lwip/**/*.o
 failsafe/lwip/**/*.su
 failsafe/lwip/**/.*.o.cmd

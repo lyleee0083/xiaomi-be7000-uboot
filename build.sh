@@ -6,6 +6,7 @@ cd -- "$(dirname -- "$0")"
 readonly board=ipq9574_xiaomi_be7000
 readonly defconfig="$board"_defconfig
 readonly output="bin/openwrt-$board-u-boot.mbn"
+readonly toolchain_commit=0daf0879219130c46812cd5029fbcc2940316b16
 
 usage() {
 	printf 'Usage: %s [%s|%s|clean|clean_all]\n' "$0" "$board" "$defconfig"
@@ -48,6 +49,19 @@ case "${1:-$board}" in
 		exit 2
 		;;
 esac
+
+if [[ $(git -C "$STAGING_DIR" rev-parse HEAD 2>/dev/null) != "$toolchain_commit" ]]; then
+	printf 'The toolchain in ../staging_dir must be at %s.\n' "$toolchain_commit" >&2
+	exit 1
+fi
+
+source_commit=$(git rev-parse --verify HEAD)
+export SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$source_commit")"
+export LC_ALL=C TZ=UTC
+export LOCALVERSION="-g$(git rev-parse --short=12 "$source_commit")"
+export NODE_PATH="$(pwd -P)/failsafe/html/node_modules"
+node -e 'for (const name of Object.keys(require("./failsafe/html/package.json").dependencies)) require(name)'
+command -v zopfli >/dev/null
 
 if command -v python3 >/dev/null 2>&1; then
 	python=python3

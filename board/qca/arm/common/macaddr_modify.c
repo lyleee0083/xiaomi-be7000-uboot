@@ -10,7 +10,6 @@
 #include "macaddr_modify.h"
 
 #define ART_BASE_SIZE		0x1000
-#define ART_PART_SIZE		0x100000
 #define ART_ERASE_SIZE		0x20000
 #define ART_MAC_LEN		6
 #define ART_WIFI_HEADER_SIZE	28
@@ -31,105 +30,148 @@ static const struct art_wifi_layout wifi_layouts[MACADDR_WIFI_MAX / 2] = {
 
 static u16 xor16_checksum(const void *buf, size_t len)
 {
-	const u16 *words = buf;
+	const u8 *bytes = buf;
 	u16 checksum = 0;
 	size_t i;
 
-	for (i = 0; i < len / 2; i++)
-		checksum ^= le16_to_cpu(words[i]);
+	for (i = 0; i < len; i += sizeof(u16))
+		checksum ^= get_unaligned_le16(bytes + i);
 	return checksum;
 }
 
-static loff_t art_part_offset(void)
-{
-	u32 start_blocks, size_blocks;
+struct art_region {
+	struct mtd_info *mtd;
+	u64 base;
+	u64 size;
+};
 
-	if (smem_getpart("0:ART", &start_blocks, &size_blocks) < 0)
-		return -1;
-
-	return (loff_t)qca_smem_flash_info.flash_block_size * start_blocks;
-}
-
-static int art_read(loff_t offset, size_t size, void *buf)
+static int art_get_region(struct art_region *region)
 {
 	struct mtd_info *mtd = &nand_info[CONFIG_NAND_FLASH_INFO_IDX];
 	u32 flash_type = qca_smem_flash_info.flash_type;
-	size_t read_len;
-	loff_t base;
-	int ret;
+	u32 block_size = qca_smem_flash_info.flash_block_size;
+	u32 start_blocks, size_blocks;
 
 	if (flash_type != SMEM_BOOT_NAND_FLASH &&
 	    flash_type != SMEM_BOOT_QSPI_NAND_FLASH)
 		return -EINVAL;
-	if (offset < 0 || offset > ART_PART_SIZE ||
-	    size > ART_PART_SIZE - offset)
+	if (!block_size || mtd->erasesize != ART_ERASE_SIZE ||
+	    smem_getpart("0:ART", &start_blocks, &size_blocks) < 0 ||
+	    !size_blocks)
 		return -EINVAL;
 
-	base = art_part_offset();
-	if (base < 0 || base > 0xffffffffLL)
+	region->mtd = mtd;
+	region->base = (u64)block_size * start_blocks;
+	region->size = (u64)block_size * size_blocks;
+	if (region->base % ART_ERASE_SIZE || region->size % ART_ERASE_SIZE ||
+	    region->base > mtd->size || region->size > mtd->size - region->base)
 		return -EINVAL;
+	return 0;
+}
 
-	ret = mtd_read(mtd, base + offset, size, &read_len, buf);
+static int art_read_region(const struct art_region *region, u64 offset,
+			   size_t size, void *buf)
+{
+	size_t read_len;
+	int ret;
+
+	if (offset > region->size || size > region->size - offset)
+		return -EINVAL;
+	ret = mtd_read(region->mtd, region->base + offset, size, &read_len, buf);
 	if (ret < 0 && !mtd_is_bitflip(ret))
 		return ret;
-
 	return read_len == size ? 0 : -EIO;
 }
 
-static int art_write(loff_t offset, size_t size, const void *buf)
+static int art_read(u64 offset, size_t size, void *buf)
 {
-	struct mtd_info *mtd = &nand_info[CONFIG_NAND_FLASH_INFO_IDX];
+	struct art_region region;
+	int ret = art_get_region(&region);
+
+	if (ret)
+		return ret;
+	return art_read_region(&region, offset, size, buf);
+}
+
+static int art_write(u64 offset, size_t size, const void *buf)
+{
+	struct art_region region;
 	struct erase_info erase = { 0 };
-	loff_t base, block_offset;
+	u64 block_offset;
 	size_t in_block, written;
-	u8 *block;
+	u8 *block, *readback;
 	int ret;
 
-	if (offset < 0 || offset >= ART_PART_SIZE || !size ||
-	    mtd->erasesize != ART_ERASE_SIZE)
-		return -EINVAL;
-
-	in_block = (size_t)offset % ART_ERASE_SIZE;
-	if (size > ART_ERASE_SIZE - in_block)
+	ret = art_get_region(&region);
+	if (ret)
+		return ret;
+	in_block = offset % ART_ERASE_SIZE;
+	if (!size || size > ART_ERASE_SIZE - in_block)
 		return -EINVAL;
 	block_offset = offset - in_block;
 
-	/* Preserve the other ART data in the NAND erase block. */
-	block = memalign(ARCH_DMA_MINALIGN, ART_ERASE_SIZE);
+	block = memalign(ARCH_DMA_MINALIGN, ART_ERASE_SIZE * 2);
 	if (!block)
-		return -EINVAL;
-	ret = art_read(block_offset, ART_ERASE_SIZE, block);
-	if (ret < 0)
+		return -ENOMEM;
+	readback = block + ART_ERASE_SIZE;
+
+	ret = art_read_region(&region, block_offset, ART_ERASE_SIZE, block);
+	if (ret)
 		goto out;
 
 	memcpy(block + in_block, buf, size);
-	base = art_part_offset();
-	if (base < 0 || base > 0xffffffffLL) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	erase.mtd = mtd;
-	erase.addr = base + block_offset;
+	erase.mtd = region.mtd;
+	erase.addr = region.base + block_offset;
 	erase.len = ART_ERASE_SIZE;
-	ret = mtd_erase(mtd, &erase);
-	if (ret < 0)
+	ret = mtd_erase(region.mtd, &erase);
+	if (ret)
 		goto out;
 
-	ret = mtd_write(mtd, erase.addr, ART_ERASE_SIZE, &written, block);
-	if (ret < 0)
+	ret = mtd_write(region.mtd, erase.addr, ART_ERASE_SIZE, &written, block);
+	if (ret)
 		goto out;
 	if (written != ART_ERASE_SIZE) {
 		ret = -EIO;
 		goto out;
 	}
 
-	ret = art_read(block_offset, ART_ERASE_SIZE, block);
-	if (!ret && memcmp(block + in_block, buf, size))
+	ret = art_read_region(&region, block_offset, ART_ERASE_SIZE, readback);
+	if (!ret && memcmp(block, readback, ART_ERASE_SIZE))
 		ret = -EIO;
 out:
 	free(block);
 	return ret;
+}
+
+static int art_wifi_data_valid(const struct art_wifi_layout *layout,
+			       const u8 *data)
+{
+	return data[0] == ART_WIFI_VALID_HEADER &&
+		xor16_checksum(data, layout->checksum_size) == 0xffff;
+}
+
+int macaddr_validate_art_image(const void *image, size_t size)
+{
+	struct art_region region;
+	const u8 *bytes = image;
+	size_t i;
+	int ret = art_get_region(&region);
+
+	if (ret)
+		return ret;
+	if (!bytes || size != region.size || size < ART_BASE_SIZE ||
+	    !is_valid_ethaddr(bytes))
+		return -EINVAL;
+
+	for (i = 0; i < ARRAY_SIZE(wifi_layouts); i++) {
+		const struct art_wifi_layout *layout = &wifi_layouts[i];
+
+		if (layout->offset > size ||
+		    layout->checksum_size > size - layout->offset ||
+		    !art_wifi_data_valid(layout, bytes + layout->offset))
+			return -EINVAL;
+	}
+	return 0;
 }
 
 int macaddr_read_base(u8 *mac, int mac_index) {
@@ -283,7 +325,7 @@ int macaddr_wifi_cs_valid(int wifi_index)
 		return 0;
 
 	valid = art_read(layout->offset, layout->checksum_size, cal) == 0 &&
-		xor16_checksum(cal, layout->checksum_size) == 0xffff;
+		art_wifi_data_valid(layout, cal);
 	free(cal);
 	return valid;
 }

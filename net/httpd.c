@@ -16,6 +16,7 @@
 #include <nand.h>
 #endif
 #include <ipq_api.h>
+#include "../board/qca/arm/common/macaddr_modify.h"
 #include <sysupgrade_parser.h>
 #include <asm/arch-qca-common/smem.h>
 #ifdef CONFIG_SPI_FLASH
@@ -439,6 +440,10 @@ static int do_art_upgrade(const ulong size) {
 	uint32_t flash_type;
 	if (get_current_flash_type(&flash_type) != 0)
 		return -1;
+	if (macaddr_validate_art_image((const void *)UPLOAD_ADDR, size)) {
+		printf("\n* ART image does not match the partition or BE7000 calibration layout *\n");
+		return -1;
+	}
 	int fw_type = check_fw_type((void *)UPLOAD_ADDR);
 	if (fw_type == FW_TYPE_CDT || fw_type == FW_TYPE_ELF || fw_type == FW_TYPE_GPT || fw_type == FW_TYPE_MIBIB) {
 		printf("\n* The %s type is not allowed to upgrade to the ART partition *\n", fw_type_to_string(fw_type));

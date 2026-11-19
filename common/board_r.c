@@ -66,7 +66,6 @@
 #endif
 #ifdef CONFIG_LWIP_HTTPD
 #include <ipq_api.h>
-#include <webterm.h>
 #endif
 
 DECLARE_GLOBAL_DATA_PTR;
@@ -227,14 +226,6 @@ static int initr_logbuffer(void)
 }
 #endif
 
-#ifdef CONFIG_LWIP_HTTPD
-static int initr_webterm(void)
-{
-	//puts("WebTerm: Initializing web terminal...\n");
-	webterm_init();
-	return 0;
-}
-#endif /* CONFIG_LWIP_HTTPD */
 
 #ifdef CONFIG_POST
 static int initr_post_backlog(void)
@@ -937,10 +928,6 @@ init_fnc_t init_sequence_r[] = {
 #ifdef CONFIG_CMD_NET
 	INIT_FUNC_WATCHDOG_RESET
 	initr_net,
-#endif
-#ifdef CONFIG_LWIP_HTTPD
-	INIT_FUNC_WATCHDOG_RESET
-	initr_webterm,
 #endif
 #ifdef CONFIG_POST
 	initr_post,

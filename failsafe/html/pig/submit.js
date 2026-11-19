@@ -91,7 +91,7 @@ function handleSubmit(e) {
 }
 
 function showFail(isTypeMismatch) {
-	document.querySelector('.card').innerHTML='<h2>验证失败</h2><div class="error"><p>'+(isTypeMismatch?'类型不匹配':'大小不匹配')+'</p></div><button onclick="window.open(\'term.html\',\'_blank\')">终端详情</button>';
+	document.querySelector('.card').innerHTML='<h2>验证失败</h2><div class="error"><p>'+(isTypeMismatch?'类型不匹配':'大小不匹配')+'</p></div>';
 }
 function pollUpgradeStatus() {
 	var done = 0;
@@ -104,7 +104,7 @@ function pollUpgradeStatus() {
 				done = 1;
 				var el = document.querySelector('.card');
 				if (!el) { el = document.createElement('div'); el.className = 'card'; (document.querySelector('main') || document.body).appendChild(el); }
-				el.innerHTML = '<h2>更新完成</h2><p>按需自动或手动重启。</p><button onclick="if(confirm(\'确认重启？\')){fetch(\'/webterm/cmd\',{method:\'POST\',headers:{\'Content-Type\':\'text/plain\'},body:\'reset\'});showStep(3,\'设备重启中...\',3);pingDevice(3)}">手动重启</button>';
+				el.innerHTML = '<h2>更新完成</h2><p>请在设备端重启。</p>';
 				return;
 			}
 			if (s === 'flashing') { showStep(2, '写入中...'); return setTimeout(check, 1000); }
@@ -120,7 +120,3 @@ document.querySelector('form').addEventListener('submit', handleSubmit);
 document.querySelector('input[type=file]').addEventListener('change', function () {
 	calcSHA256(this);
 });
-
-function checkReboot(){if(location.hash==='#reboot'){showStep(3,'设备重启中...',3);pingDevice(3);}}
-checkReboot();
-window.addEventListener('hashchange',checkReboot);

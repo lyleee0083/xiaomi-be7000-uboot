@@ -1,0 +1,13 @@
+{
+  "name": "be7000-webfailsafe-build",
+  "private": true,
+  "engines": {
+    "node": "24.15.0"
+  },
+  "dependencies": {
+    "html-minifier-terser": "7.2.0",
+    "clean-css": "5.3.3",
+    "terser": "5.51.2",
+    "svgo": "4.1.0"
+  }
+}

@@ -19,7 +19,6 @@
 #include <asm/arch-qca-common/qpic_nand.h>
 #endif
 #include <command.h>
-#include <webterm.h>
 #include <version.h>
 #include <fdtdec.h>
 #if defined(CONFIG_IPQ40XX) || defined(CONFIG_IPQ806X)
@@ -1565,10 +1564,6 @@ static err_t httpd_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t er
 	switch (hs->state) {
 	case STATE_NONE:
 		if (strncmp(data, "GET", 3) == 0 && is_http_method_separator(data[3])) {
-			if (strncmp(&data[4], "/webterm", 8) == 0) {
-				webterm_http_handler(hs, data, data_len);
-				break;
-			}
 			if (strncmp(&data[4], "/upgrade_status", 15) == 0) {
 				httpd_handle_upgrade_status(hs);
 				break;
@@ -1600,10 +1595,6 @@ static err_t httpd_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t er
 			}
 			httpd_handle_file_request(hs, data, data_len);
 		} else if (strncmp(data, "POST", 4) == 0 && is_http_method_separator(data[4])) {
-			if (strncmp(&data[5], "/webterm", 8) == 0) {
-				webterm_http_handler(hs, data, data_len);
-				break;
-			}
 			if (strncmp(&data[5], "/env_set", 8) == 0) {
 				httpd_handle_env_set(hs, data, data_len);
 				break;
@@ -1821,7 +1812,7 @@ void failsafe_httpd_poll(void) {
 		upgrade_status = 2;
 		httpd_poll_wait(1500);
 
-		if (do_http_upgrade(net_boot_file_size, webfailsafe_upgrade_type) < 0) {
+		if (do_http_upgrade(net_boot_file_size, webfailsafe_upgrade_type) != 0) {
 			do_http_progress(WEBFAILSAFE_PROGRESS_UPGRADE_FAILED);
 			upgrade_status = 3;
 			httpd_poll_wait(2000);
@@ -1836,11 +1827,6 @@ void failsafe_httpd_poll(void) {
 			printf("reboot fail\n");
 		}
 		return;
-	}
-
-	if (webterm_run_pending_command()) {
-		if (!eth_is_active(eth_get_dev()))
-			eth_init_attempted = 0;
 	}
 
 #if defined(CONFIG_IPQ5332) || defined(CONFIG_IPQ9574)

@@ -9,43 +9,37 @@ permissions:
   contents: read
 
 env:
-  ARTIFACT_VERSION: '0.0.1'
+  ARTIFACT_VERSION: '0.0.2'
+  APT_SNAPSHOT: '20261118T000000Z'
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Check out source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '24'
+          node-version: '24.15.0'
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y build-essential libncurses-dev gawk git gettext libssl-dev python3 wget cpio flex bison bc rsync gzip zopfli device-tree-compiler
+          sudo apt-get --snapshot "$APT_SNAPSHOT" update -qq
+          sudo apt-get --snapshot "$APT_SNAPSHOT" install -y build-essential libncurses-dev gawk git gettext libssl-dev python3 wget cpio flex bison bc rsync gzip zopfli device-tree-compiler
 
       - name: Install Webfailsafe minification tools
-        run: |
-          npm install --global \
-            html-minifier-terser@7.2.0 \
-            clean-css@5.3.3 \
-            terser@5.51.2 \
-            svgo@4.1.0
-          export NODE_PATH="$(npm root --global)"
-          node -e 'for (const name of ["html-minifier-terser","clean-css","terser","svgo"]) {
-            require(name);
-            console.log(`${name}: ${require.resolve(name)}`);
-          }'
-          printf 'NODE_PATH=%s\n' "$NODE_PATH" >> "$GITHUB_ENV"
+        run: npm ci --prefix failsafe/html --ignore-scripts --no-audit --no-fund
 
       - name: Fetch the ARM OpenWrt toolchain
-        run: git clone --depth=1 https://github.com/1980490718/toolchain-arm_cortex-a7_gcc-5.2.0.git ../staging_dir
+        run: |
+          git init ../staging_dir
+          git -C ../staging_dir fetch --no-tags --depth=1 https://github.com/1980490718/toolchain-arm_cortex-a7_gcc-5.2.0.git 0daf0879219130c46812cd5029fbcc2940316b16
+          git -C ../staging_dir checkout --detach FETCH_HEAD
 
       - name: Build Xiaomi BE7000 U-Boot
         run: ./build.sh ipq9574_xiaomi_be7000
@@ -65,7 +59,7 @@ jobs:
             "bin/openwrt-ipq9574_xiaomi_be7000-u-boot-${ARTIFACT_VERSION}.mbn"
 
       - name: Upload the BE7000 MBN image
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           path: bin/openwrt-ipq9574_xiaomi_be7000-u-boot-${{ env.ARTIFACT_VERSION }}.mbn
           if-no-files-found: error

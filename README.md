@@ -14,26 +14,29 @@
 
 本项目依据从小米 BE7000 原厂固件获取的 ART 布局信息，实现 ART/MAC 读写与校验，支持六个有线和六个无线 MAC 槽位。无线校准区位于 ART 的 `0x1000`、`0x33000`、`0x65000`，读写和 Webfailsafe 校验使用各校准区对应的 MAC 与 XOR16 字段。
 
-写入通过 NAND MTD 完成，整块读取并保留同一擦除块内的其他 ART 数据，写入后回读核对修改范围。
+写入通过 NAND MTD 完成，整块读取并保留同一擦除块内的其他 ART 数据，写入后逐字节回读核对整个擦除块。读写范围由 SMEM 的实际分区长度和 NAND 几何约束。
 
 ## Linux 构建
 
-安装依赖（Ubuntu）
+Webfailsafe 保留分区备份和刷写功能。网页终端已移除；需要执行 U-Boot 命令时使用设备串口。关闭自动重启后在设备端重启。ART 恢复接受与当前设备分区等长、通过 BE7000 无线校准校验的完整镜像。
+
+安装依赖（Ubuntu 24.04，使用与 CI 相同的 APT 快照及 Node.js 24.15.0）
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y build-essential libncurses-dev gawk git gettext libssl-dev python3 \
-  wget cpio flex bison bc rsync nodejs npm gzip zopfli device-tree-compiler
-npm install -g html-minifier-terser@7.2.0 clean-css@5.3.3 terser@5.51.2 svgo@4.1.0
+sudo apt-get --snapshot 20261118T000000Z update
+sudo apt-get --snapshot 20261118T000000Z install -y build-essential libncurses-dev gawk git gettext libssl-dev python3 \
+  wget cpio flex bison bc rsync gzip zopfli device-tree-compiler
 ```
 
-将作者的 ARM OpenWrt 工具链克隆到本仓库的同级目录
+将固定版本的 ARM OpenWrt 工具链放在源码库同级目录
 
 ```bash
 git clone https://github.com/lyleee0083/xiaomi-be7000-uboot.git
-git clone --depth=1 https://github.com/1980490718/toolchain-arm_cortex-a7_gcc-5.2.0.git staging_dir
+git init staging_dir
+git -C staging_dir fetch --no-tags --depth=1 https://github.com/1980490718/toolchain-arm_cortex-a7_gcc-5.2.0.git 0daf0879219130c46812cd5029fbcc2940316b16
+git -C staging_dir checkout --detach FETCH_HEAD
 cd xiaomi-be7000-uboot
-export NODE_PATH="$(npm root -g)"
+npm ci --prefix failsafe/html --ignore-scripts --no-audit --no-fund
 ./build.sh ipq9574_xiaomi_be7000
 ```
 
