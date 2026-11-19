@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  ARTIFACT_VERSION: '0.0.1'
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -51,10 +54,20 @@ jobs:
         run: |
           awk '$1 ~ /^0x[[:xdigit:]]+$/ && $2 ~ /^(__rel_dyn_start|__rel_dyn_end|macaddr_(read|modify)_(base|wifi)|macaddr_wifi_(offset|cs_offset|checksum|cs_valid)|memalign|free|mtd_(read|write|erase)|smem_getpart|qca_smem_flash_info|nand_info)$/ { print $1, $2 }' u-boot.map
 
+      - name: Add the build version to the MBN filename
+        shell: bash
+        run: |
+          if [[ ! "$ARTIFACT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            printf 'Invalid artifact version: %s\n' "$ARTIFACT_VERSION" >&2
+            exit 1
+          fi
+          mv -- bin/openwrt-ipq9574_xiaomi_be7000-u-boot.mbn \
+            "bin/openwrt-ipq9574_xiaomi_be7000-u-boot-${ARTIFACT_VERSION}.mbn"
+
       - name: Upload the BE7000 MBN image
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: u-boot-ipq9574_xiaomi_be7000
-          path: bin/openwrt-ipq9574_xiaomi_be7000-u-boot.mbn
+          name: u-boot-ipq9574_xiaomi_be7000-${{ env.ARTIFACT_VERSION }}
+          path: bin/openwrt-ipq9574_xiaomi_be7000-u-boot-${{ env.ARTIFACT_VERSION }}.mbn
           if-no-files-found: error
           retention-days: 30

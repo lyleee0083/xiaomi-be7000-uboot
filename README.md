@@ -40,7 +40,8 @@ export NODE_PATH="$(npm root -g)"
 产物为 `bin/openwrt-ipq9574_xiaomi_be7000-u-boot.mbn`，格式为 MBN v6（SHA-384）。
 `./build.sh clean_all` 清理 MBN 文件，`./build.sh clean` 同时清理构建中间文件。
 
-GitHub Actions 的 **Build Xiaomi BE7000 U-Boot** 工作流支持 `main` 推送和手动运行，成功后可在该次运行的 Artifacts 下载 MBN。
+GitHub Actions 的 **Build Xiaomi BE7000 U-Boot** 工作流支持 `main` 推送和手动运行，成功后可在该次运行的 Artifacts 下载 `openwrt-ipq9574_xiaomi_be7000-u-boot-<版本>.mbn`。
+版本由 `.github/workflows/build-ipq-uboot.yml` 中的 `ARTIFACT_VERSION` 指定。更新仓库并准备生成下一版产物时递增版本，例如从 `0.0.1` 升到 `0.0.2`。同一版本的重跑沿用原版本号。
 
 ## 许可与声明
 
