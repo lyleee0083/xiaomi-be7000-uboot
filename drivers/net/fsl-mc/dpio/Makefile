@@ -5,5 +5,3 @@
 #
 
 # Layerscape MC DPIO driver
-obj-y += dpio.o	\
-	qbman_portal.o

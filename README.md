@@ -8,7 +8,7 @@
 
 ## 源码范围
 
-`board/` 仅保留 IPQ9574 板级实现和 Qualcomm 共用代码。`arch/arm/dts/` 只构建 BE7000 的设备树，板级 DTS 引用的基础描述作为 DTSI 保留。ARMv7、闪存、网络和 Webfailsafe 共用代码参与构建。
+`board/` 仅保留 IPQ9574 板级实现和 Qualcomm 共用代码。`arch/arm/dts/` 只构建 BE7000 的设备树，板级 DTS 引用的基础描述作为 DTSI 保留。仓库保留 BE7000 的 ARMv7、闪存、网络与 Webfailsafe 源码、构建脚本和配置生成器，以及必要的使用说明和许可证。
 
 ## ART/MAC 定制
 

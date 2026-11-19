@@ -5,6 +5,3 @@
 # SPDX-License-Identifier:     GPL-2.0+
 #
 
-obj-$(CONFIG_ADC) += adc-uclass.o
-obj-$(CONFIG_ADC_EXYNOS) += exynos-adc.o
-obj-$(CONFIG_ADC_SANDBOX) += sandbox.o

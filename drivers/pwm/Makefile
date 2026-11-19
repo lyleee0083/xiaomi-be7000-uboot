@@ -10,4 +10,3 @@
 
 #ccflags-y += -DDEBUG
 
-obj-$(CONFIG_PWM_IMX) += pwm-imx.o pwm-imx-util.o

@@ -47,18 +47,6 @@ jobs:
       - name: Build Xiaomi BE7000 U-Boot
         run: ./build.sh ipq9574_xiaomi_be7000
 
-      - name: Collect source dependency evidence
-        run: |
-          find . -path './.git' -prune -o -type f -name '*.cmd' -print0 > "$RUNNER_TEMP/be7000-dependency-files"
-          tar --null -czf "$RUNNER_TEMP/be7000-build-dependencies.tar.gz" -T "$RUNNER_TEMP/be7000-dependency-files" .config u-boot.cfg u-boot.map
-
-      - name: Upload source dependency evidence
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: be7000-build-dependencies
-          path: ${{ runner.temp }}/be7000-build-dependencies.tar.gz
-          if-no-files-found: error
-          retention-days: 3
       - name: Record ART/MAC symbol addresses
         run: |
           awk '$1 ~ /^0x[[:xdigit:]]+$/ && $2 ~ /^(__rel_dyn_start|__rel_dyn_end|macaddr_(read|modify)_(base|wifi)|macaddr_wifi_(offset|cs_offset|checksum|cs_valid)|memalign|free|mtd_(read|write|erase)|smem_getpart|qca_smem_flash_info|nand_info)$/ { print $1, $2 }' u-boot.map

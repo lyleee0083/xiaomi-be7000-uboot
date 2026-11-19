@@ -10,7 +10,7 @@ NAME =
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
-# More info can be located in ./README
+# More info can be located in ./README.md
 # Comments in this file are targeted only to the developer, do not
 # expect to learn how to build the kernel reading this file.
 
@@ -695,18 +695,13 @@ libs-y += drivers/usb/musb-new/
 libs-y += drivers/usb/phy/
 libs-y += drivers/usb/ulpi/
 libs-y += common/
-libs-$(CONFIG_API) += api/
-libs-$(CONFIG_HAS_POST) += post/
-libs-y += test/
-libs-y += test/dm/
-libs-$(CONFIG_UT_ENV) += test/env/
 libs-$(CONFIG_LWIP_HTTPD) += failsafe/
 
 libs-y += $(if $(BOARDDIR),board/$(BOARDDIR)/)
 
 libs-y := $(sort $(libs-y))
 
-u-boot-dirs	:= $(patsubst %/,%,$(filter %/, $(libs-y))) tools examples
+u-boot-dirs	:= $(patsubst %/,%,$(filter %/, $(libs-y))) tools
 
 u-boot-alldirs	:= $(sort $(u-boot-dirs) $(patsubst %/,%,$(filter %/, $(libs-))))
 
@@ -863,7 +858,6 @@ ifneq ($(CONFIG_SYS_GENERIC_BOARD),y)
 	@echo "===================== WARNING ======================"
 	@echo "Please convert this board to generic board."
 	@echo "Otherwise it will be removed by the end of 2014."
-	@echo "See doc/README.generic-board for further information"
 	@echo "===================================================="
 endif
 ifeq ($(CONFIG_DM_I2C_COMPAT),y)
@@ -1294,9 +1288,6 @@ endif
 tools: prepare
 # The "tools" are needed early
 $(filter-out tools, $(u-boot-dirs)): tools
-# The "examples" conditionally depend on U-Boot (say, when USE_PRIVATE_LIBGCC
-# is "yes"), so compile examples after U-Boot is compiled.
-examples: $(filter-out examples, $(u-boot-dirs))
 
 define filechk_uboot.release
 	echo "$(UBOOTVERSION)$$($(CONFIG_SHELL) $(srctree)/scripts/setlocalversion $(srctree))"
@@ -1525,7 +1516,7 @@ clean: rm-files := $(CLEAN_FILES)
 
 clean-dirs	:= $(foreach f,$(u-boot-alldirs),$(if $(wildcard $(srctree)/$f/Makefile),$f))
 
-clean-dirs      := $(addprefix _clean_, $(clean-dirs) doc/DocBook)
+clean-dirs      := $(addprefix _clean_, $(clean-dirs))
 
 PHONY += $(clean-dirs) clean archclean
 $(clean-dirs):
@@ -1600,8 +1591,6 @@ help:
 	@echo  'Static analysers'
 	@echo  '  checkstack      - Generate a list of stack hogs'
 	@echo  ''
-	@echo  'Documentation targets:'
-	@$(MAKE) -f $(srctree)/doc/DocBook/Makefile dochelp
 	@echo  ''
 	@echo  '  make V=0|1 [targets] 0 => quiet build (default), 1 => verbose build'
 	@echo  '  make V=2   [targets] 2 => give reason for rebuild of target'
@@ -1616,14 +1605,8 @@ help:
 	@echo  '		Multiple levels can be combined with W=12 or W=123'
 	@echo  ''
 	@echo  'Execute "make" or "make all" to build all targets marked with [*] '
-	@echo  'For further info see the ./README file'
+	@echo  'For further info see the ./README.md file'
 
-
-# Documentation targets
-# ---------------------------------------------------------------------------
-%docs: scripts_basic FORCE
-	$(Q)$(MAKE) $(build)=scripts build_docproc
-	$(Q)$(MAKE) $(build)=doc/DocBook $@
 
 # Dummies...
 PHONY += prepare scripts
