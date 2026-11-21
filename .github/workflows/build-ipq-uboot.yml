@@ -3,17 +3,20 @@ name: Build Xiaomi BE7000 U-Boot
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 env:
-  ARTIFACT_VERSION: '0.0.5'
+  ARTIFACT_VERSION: '0.0.6'
   APT_SNAPSHOT: '20261118T000000Z'
 
 jobs:
   build:
+    name: Verify BE7000 U-Boot
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -41,6 +44,11 @@ jobs:
           git -C ../staging_dir fetch --no-tags --depth=1 https://github.com/1980490718/toolchain-arm_cortex-a7_gcc-5.2.0.git 0daf0879219130c46812cd5029fbcc2940316b16
           git -C ../staging_dir checkout --detach FETCH_HEAD
 
+      - name: Check Webfailsafe request parsing and ART rollback
+        run: |
+          cc -std=gnu99 -Wall -Wextra -Werror tests/test-request.c -o /tmp/be7000-test-request
+          /tmp/be7000-test-request
+          python3 tests/test-art-rollback.py
       - name: Build Xiaomi BE7000 U-Boot
         run: ./build.sh ipq9574_xiaomi_be7000
 

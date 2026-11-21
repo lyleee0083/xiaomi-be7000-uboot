@@ -17,6 +17,7 @@ void webterm_capture_output(const char *str);
 int webterm_get_output(char *buf, int size, int since);
 
 void webterm_reset(void);
+void webterm_lock(void);
 
 void webterm_http_handler(struct failsafe_httpd_state *hs, char *data, int data_len);
 
