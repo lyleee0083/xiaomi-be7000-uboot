@@ -19,6 +19,7 @@
 #include <asm/arch-qca-common/qpic_nand.h>
 #endif
 #include <command.h>
+#include <webterm.h>
 #include <version.h>
 #include <fdtdec.h>
 #if defined(CONFIG_IPQ40XX) || defined(CONFIG_IPQ806X)
@@ -48,9 +49,6 @@ extern void (*flashread_yield_fn)(void);
 #include "lwip/opt.h"
 #include "lwip/tcp.h"
 #include "lwip/priv/tcp_priv.h"
-#include "lwip/altcp_tcp.h"
-#include "tls/recovery_tls.h"
-#include "webterm.h"
 #include "lwip/pbuf.h"
 #include "lwip/etharp.h"
 #include "lwip/timeouts.h"
@@ -177,9 +175,13 @@ static void httpd_state_reset(struct failsafe_httpd_state *hs) {
 	hs->upload = 0;
 	hs->upload_total = 0;
 	if (hs->owns_global) {
+		int done = upload.done, failed = upload.failed;
 		hs->owns_global = 0;
 		hs_global = NULL;
+		tcp_setprio(hs->pcb, TCP_PRIO_MIN);
 		memset(&upload, 0, sizeof(upload));
+		upload.done = done;
+		upload.failed = failed;
 		upload.packet_counter = 255;
 		memset(&backup, 0, sizeof(backup));
 		flashread_yield_fn = NULL;
@@ -194,16 +196,14 @@ static void httpd_state_reset(struct failsafe_httpd_state *hs) {
 	}
 }
 
-static void httpd_conn_abort(struct failsafe_httpd_state *hs, struct altcp_pcb *pcb) {
-	altcp_arg(pcb, NULL);
+static void httpd_conn_abort(struct failsafe_httpd_state *hs, struct tcp_pcb *pcb) {
+	tcp_arg(pcb, NULL);
 	httpd_state_reset(hs);
-	free(hs->reply);
-	free(hs->request);
 	free(hs);
-	altcp_abort(pcb);
+	tcp_abort(pcb);
 }
 
-static err_t httpd_recv_abort(struct failsafe_httpd_state *hs, struct altcp_pcb *pcb, char *data, int need_free, struct pbuf *p) {
+static err_t httpd_recv_abort(struct failsafe_httpd_state *hs, struct tcp_pcb *pcb, char *data, int need_free, struct pbuf *p) {
 	httpd_conn_abort(hs, pcb);
 	if (need_free) free(data);
 	pbuf_free(p);
@@ -391,6 +391,7 @@ static int httpd_check_upload_complete(struct failsafe_httpd_state *hs) {
 		httpd_upload_complete(hs);
 		static const char resp_ok[] = "HTTP/1.0 200 OK\r\nConnection: close\r\n\r\n";
 		static const char resp_err[] = "HTTP/1.0 500 Internal Server Error\r\nConnection: close\r\n\r\n";
+		httpd_state_reset(hs);
 		hs->state = STATE_FILE_REQUEST;
 		if (!upload.failed) {
 			hs->dataptr = (u8_t *)resp_ok;
@@ -1041,12 +1042,13 @@ static void httpd_handle_env_set(struct failsafe_httpd_state *hs, char *data, in
 		char *amp = strchr(body, '&');
 		char name[64] = "", value[128] = "";
 		char *eq = strchr(body, '=');
-		const char *end = amp ? amp : body + strlen(body);
-
-		if (eq && eq < end && eq - body < sizeof(name) &&
-		    end - eq - 1 < sizeof(value)) {
+		if (eq && eq < (amp ? amp : body + strlen(body))) {
 			memcpy(name, body, eq - body);
-			memcpy(value, eq + 1, end - eq - 1);
+			name[eq - body] = '\0';
+			if (amp)
+				memcpy(value, eq + 1, amp - eq - 1);
+			else
+				strcpy(value, eq + 1);
 			if (strcmp(name, "reset_key") == 0 || strcmp(name, "config_name") == 0) {
 				setenv(name, value[0] ? value : NULL);
 				saveenv();
@@ -1338,7 +1340,7 @@ static void httpd_handle_backup(struct failsafe_httpd_state *hs, char *data, int
 	hs->state = STATE_FILE_REQUEST;
 	hs->owns_global = 1;
 	hs_global = hs;
-	altcp_setprio(hs->pcb, TCP_PRIO_NORMAL);
+	tcp_setprio(hs->pcb, TCP_PRIO_NORMAL);
 	hs->dataptr = (u8_t *)part_json_buf;
 	hs->upload = hdr_len;
 	httpd_send_data(hs);
@@ -1414,12 +1416,12 @@ static void httpd_handle_file_request(struct failsafe_httpd_state *hs, char *dat
 
 void httpd_send_data(struct failsafe_httpd_state *hs) {
 	while (hs->upload > 0) {
-		u16_t snd_buf = altcp_sndbuf(hs->pcb);
+		u16_t snd_buf = tcp_sndbuf(hs->pcb);
 		if (snd_buf == 0)
 			break;
 
 		u16_t send_len = (hs->upload > snd_buf) ? snd_buf : (u16_t)hs->upload;
-		err_t wr_err = altcp_write(hs->pcb, hs->dataptr, send_len, TCP_WRITE_FLAG_COPY);
+		err_t wr_err = tcp_write(hs->pcb, hs->dataptr, send_len, TCP_WRITE_FLAG_COPY);
 		if (wr_err == ERR_OK) {
 			hs->dataptr += send_len;
 			hs->upload -= send_len;
@@ -1430,7 +1432,7 @@ void httpd_send_data(struct failsafe_httpd_state *hs) {
 			send_len = TCP_MSS;
 			if (hs->upload < send_len)
 				send_len = (u16_t)hs->upload;
-			wr_err = altcp_write(hs->pcb, hs->dataptr, send_len, TCP_WRITE_FLAG_COPY);
+			wr_err = tcp_write(hs->pcb, hs->dataptr, send_len, TCP_WRITE_FLAG_COPY);
 			if (wr_err == ERR_OK) {
 				hs->dataptr += send_len;
 				hs->upload -= send_len;
@@ -1439,7 +1441,7 @@ void httpd_send_data(struct failsafe_httpd_state *hs) {
 		}
 		break;
 	}
-	altcp_output(hs->pcb);
+	tcp_output(hs->pcb);
 }
 
 static void backup_chunk_next(void) {
@@ -1489,25 +1491,7 @@ static void httpd_poll_wait(int count) {
 	}
 }
 
-static err_t httpd_finish(struct failsafe_httpd_state *hs, struct altcp_pcb *pcb)
-{
-	altcp_arg(pcb, NULL);
-	altcp_recv(pcb, NULL);
-	altcp_sent(pcb, NULL);
-	altcp_err(pcb, NULL);
-	altcp_poll(pcb, NULL, 0);
-	httpd_state_reset(hs);
-	free(hs->reply);
-	free(hs->request);
-	free(hs);
-	if (altcp_close(pcb) != ERR_OK) {
-		altcp_abort(pcb);
-		return ERR_ABRT;
-	}
-	return ERR_OK;
-}
-
-static err_t httpd_sent(void *arg, struct altcp_pcb *pcb, u16_t len) {
+static err_t httpd_sent(void *arg, struct tcp_pcb *pcb, u16_t len) {
 	struct failsafe_httpd_state *hs = (struct failsafe_httpd_state *)arg;
 
 	if (hs == NULL)
@@ -1515,7 +1499,7 @@ static err_t httpd_sent(void *arg, struct altcp_pcb *pcb, u16_t len) {
 
 	hs->last_activity = (u32_t)get_timer(0);
 
-	if (hs == hs_global && backup.sending_header && hs->upload <= 0) {
+	if (backup.sending_header && hs->upload <= 0) {
 		backup.sending_header = 0;
 		hs->state = STATE_FILE_REQUEST;
 		hs->dataptr = (u8_t *)(uintptr_t)backup.data_addr;
@@ -1523,169 +1507,28 @@ static err_t httpd_sent(void *arg, struct altcp_pcb *pcb, u16_t len) {
 	}
 
 	if (hs->upload <= 0) {
-		if (hs == hs_global && backup.chunked && backup.total_remaining > 0 &&
-		    !backup.chunk_busy) {
+		if (backup.chunked && backup.total_remaining > 0 && !backup.chunk_busy) {
 			backup.chunk_busy = 1;
 			return ERR_OK;
 		}
-		if (hs == hs_global && backup.chunk_busy)
+		if (backup.chunk_busy)
 			return ERR_OK;
-		if (hs == hs_global && upload.done) {
+		if (upload.done) {
 			if (!upload.failed)
 				webfailsafe_ready_for_upgrade = 1;
 			upload.done = 0;
 			upload.failed = 0;
 		}
-		return httpd_finish(hs, pcb);
+		httpd_state_reset(hs);
+		tcp_close(pcb);
+		return ERR_OK;
 	}
 
 	httpd_send_data(hs);
 	return ERR_OK;
 }
 
-/* TLS may split request headers and small POST bodies across records. */
-#define RECOVERY_FIRST_REQUEST_MAX (32 * 1024)
-
-static const char *request_header(const char *data, const char *end,
-				  const char *name, size_t *length)
-{
-	const char *line = strstr(data, "\r\n");
-	size_t name_length = strlen(name);
-
-	while (line && line < end) {
-		const char *value;
-		const char *next;
-
-		line += 2;
-		next = strstr(line, "\r\n");
-		if (!next || next > end)
-			break;
-		if (next - line > name_length && line[name_length] == ':' &&
-		    !strncasecmp(line, name, name_length)) {
-			value = line + name_length + 1;
-			while (value < next && (*value == ' ' || *value == '\t'))
-				value++;
-			*length = next - value;
-			return value;
-		}
-		line = next;
-	}
-	return NULL;
-}
-
-static int recovery_request_ready(const char *data, size_t length)
-{
-	const char *headers = strstr(data, "\r\n\r\n");
-	const char *body, *value, *last;
-	size_t header_len, bytes = 0;
-	int small_post;
-
-	if (!headers)
-		return 0;
-	if (length < 18 || !memchr(data, ' ', headers - data))
-		return -1;
-	if (!strncmp(data, "GET ", 4))
-		return 1;
-	if (strncmp(data, "POST ", 5))
-		return -1;
-	/* Browser certificates are sent automatically. Require a header that
-	 * cannot be sent by a cross-origin form or a simple fetch request.
-	 */
-	value = request_header(data, headers, "X-BE7000-Request", &header_len);
-	if (!value || header_len != 1 || value[0] != '1')
-		return -1;
-	if (request_header(data, headers, "Transfer-Encoding", &header_len))
-		return -1;
-	small_post = !strncmp(data, "POST /terminal/", 15) ||
-		!strncmp(data, "POST /env_set ", 14) ||
-		!strncmp(data, "POST /mac_set ", 14);
-	if (!small_post) {
-		/* Wait until the part containing the image has a complete header.
-		 * The old parser otherwise discards an incomplete first chunk.
-		 */
-		unsigned int i;
-		body = headers + 4;
-		for (i = 0; i < ARRAY_SIZE(upload_types); i++) {
-			const char *part = strstr(body, upload_types[i].name);
-
-			if (part && strstr(part, "\r\n\r\n"))
-				return 1;
-		}
-		return 0;
-	}
-	value = request_header(data, headers, "Content-Length", &header_len);
-	if (!value || !header_len || header_len > 5)
-		return -1;
-	last = value + header_len;
-	while (value < last) {
-		if (*value < '0' || *value > '9')
-			return -1;
-		bytes = bytes * 10 + (*value++ - '0');
-	}
-	if (bytes > WEBTERM_COMMAND_MAX)
-		return -1;
-	body = headers + 4;
-	if (length - (body - data) < bytes)
-		return 0;
-	return length - (body - data) == bytes ? 1 : -1;
-}
-
-static void httpd_terminal(struct failsafe_httpd_state *hs, const char *data,
-			    size_t data_len)
-{
-	static const char response_ok[] =
-		"HTTP/1.0 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-	static const char response_error[] =
-		"HTTP/1.0 409 Conflict\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-	static const char response_forbidden[] =
-		"HTTP/1.0 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-	char header[128];
-	const char *body;
-	size_t count;
-	int header_length;
-
-	if (!recovery_tls_is_provisioned()) {
-		httpd_send_static(hs, response_forbidden, sizeof(response_forbidden) - 1);
-		return;
-	}
-	if (!strncmp(data, "GET /terminal/output ", 21)) {
-		hs->reply = malloc(sizeof(header) + WEBTERM_OUTPUT_MAX);
-		if (!hs->reply)
-			goto failed;
-		count = webterm_read(hs->reply + sizeof(header), WEBTERM_OUTPUT_MAX);
-		header_length = snprintf(header, sizeof(header),
-			"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n"
-			"Content-Length: %u\r\nCache-Control: no-store\r\n"
-			"Connection: close\r\n\r\n", (unsigned int)count);
-		memmove(hs->reply + header_length, hs->reply + sizeof(header), count);
-		memcpy(hs->reply, header, header_length);
-		httpd_send_static(hs, hs->reply, header_length + count);
-		return;
-	}
-	if (!strncmp(data, "POST /terminal/abort ", 21)) {
-		webterm_abort();
-	} else if (!strncmp(data, "POST /terminal/input ", 21)) {
-		body = strstr(data, "\r\n\r\n") + 4;
-		if (webterm_send_input(body, data_len - (body - data)))
-			goto failed;
-	} else if (!strncmp(data, "POST /terminal/command ", 23) &&
-		   !hs_global && !webfailsafe_ready_for_upgrade && upgrade_status != 2) {
-		body = strstr(data, "\r\n\r\n");
-		if (!body)
-			goto failed;
-		body += 4;
-		if (webterm_enqueue(body, data_len - (body - data)))
-			goto failed;
-	} else {
-		goto failed;
-	}
-	httpd_send_static(hs, response_ok, sizeof(response_ok) - 1);
-	return;
-failed:
-	httpd_send_static(hs, response_error, sizeof(response_error) - 1);
-}
-
-static err_t httpd_recv(void *arg, struct altcp_pcb *pcb, struct pbuf *p, err_t err) {
+static err_t httpd_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
 	struct failsafe_httpd_state *hs = (struct failsafe_httpd_state *)arg;
 	char *data;
 	int data_len, need_free = 0, offset;
@@ -1697,49 +1540,35 @@ static err_t httpd_recv(void *arg, struct altcp_pcb *pcb, struct pbuf *p, err_t 
 	}
 
 	if (p == NULL) {
-		return httpd_finish(hs, pcb);
+		httpd_state_reset(hs);
+		tcp_close(pcb);
+		return ERR_OK;
 	}
 
 	hs->last_activity = (u32_t)get_timer(0);
 
-	offset = hs->request_len;
-	data_len = offset + p->tot_len;
-	if (hs->state == STATE_NONE && recovery_tls_is_provisioned() &&
-	    data_len > RECOVERY_FIRST_REQUEST_MAX)
-		return httpd_recv_abort(hs, pcb, NULL, 0, p);
-	data = realloc(hs->request, data_len + 32);
-	if (!data)
-		return httpd_recv_abort(hs, pcb, NULL, 0, p);
-	hs->request = data;
+	data = malloc(p->tot_len + 1);
+	if (!data) {
+		pbuf_free(p);
+		httpd_conn_abort(hs, pcb);
+		return ERR_ABRT;
+	}
+	offset = 0;
 	for (q = p; q; q = q->next) {
 		memcpy(data + offset, q->payload, q->len);
 		offset += q->len;
 	}
-	memset(data + data_len, 0, 32);
-	if (hs->state == STATE_NONE && recovery_tls_is_provisioned()) {
-		int ready = recovery_request_ready(data, data_len);
-
-		if (ready < 0)
-			return httpd_recv_abort(hs, pcb, NULL, 0, p);
-		if (!ready) {
-			hs->request_len = data_len;
-			altcp_recved(pcb, p->tot_len);
-			pbuf_free(p);
-			return ERR_OK;
-		}
-	}
-	hs->request = NULL;
-	hs->request_len = 0;
+	data_len = p->tot_len;
+	data[data_len] = '\0';
 	need_free = 1;
 
 	switch (hs->state) {
 	case STATE_NONE:
-		if (!strncmp(data, "GET /terminal/", 14) ||
-		    !strncmp(data, "POST /terminal/", 15)) {
-			httpd_terminal(hs, data, data_len);
-			break;
-		}
 		if (strncmp(data, "GET", 3) == 0 && is_http_method_separator(data[3])) {
+			if (strncmp(&data[4], "/webterm", 8) == 0) {
+				webterm_http_handler(hs, data, data_len);
+				break;
+			}
 			if (strncmp(&data[4], "/upgrade_status", 15) == 0) {
 				httpd_handle_upgrade_status(hs);
 				break;
@@ -1750,8 +1579,6 @@ static err_t httpd_recv(void *arg, struct altcp_pcb *pcb, struct pbuf *p, err_t 
 				break;
 			}
 			if (strncmp(&data[4], "/backup?", 8) == 0) {
-				if (webterm_busy())
-					return httpd_recv_abort(hs, pcb, data, need_free, p);
 				httpd_handle_backup(hs, data, data_len);
 				break;
 			}
@@ -1773,8 +1600,10 @@ static err_t httpd_recv(void *arg, struct altcp_pcb *pcb, struct pbuf *p, err_t 
 			}
 			httpd_handle_file_request(hs, data, data_len);
 		} else if (strncmp(data, "POST", 4) == 0 && is_http_method_separator(data[4])) {
-			if (webterm_busy())
-				return httpd_recv_abort(hs, pcb, data, need_free, p);
+			if (strncmp(&data[5], "/webterm", 8) == 0) {
+				webterm_http_handler(hs, data, data_len);
+				break;
+			}
 			if (strncmp(&data[5], "/env_set", 8) == 0) {
 				httpd_handle_env_set(hs, data, data_len);
 				break;
@@ -1783,15 +1612,13 @@ static err_t httpd_recv(void *arg, struct altcp_pcb *pcb, struct pbuf *p, err_t 
 				httpd_handle_mac_set(hs, data, data_len);
 				break;
 			}
-			if (hs_global)
-				return httpd_recv_abort(hs, pcb, data, need_free, p);
 			data[data_len] = '\0';
 			if (httpd_parse_content_length(hs, data) < 0)
 				return httpd_recv_abort(hs, pcb, data, need_free, p);
 			hs->state = STATE_UPLOAD_REQUEST;
 			hs->owns_global = 1;
 			hs_global = hs;
-			altcp_setprio(pcb, TCP_PRIO_NORMAL);
+			tcp_setprio(pcb, TCP_PRIO_NORMAL);
 			led_off("blink_led");
 			if (httpd_parse_boundary(data) < 0 || httpd_init_upload_ram() < 0)
 				return httpd_recv_abort(hs, pcb, data, need_free, p);
@@ -1831,7 +1658,7 @@ static err_t httpd_recv(void *arg, struct altcp_pcb *pcb, struct pbuf *p, err_t 
 		break;
 	}
 
-	altcp_recved(pcb, p->tot_len);
+	tcp_recved(pcb, p->tot_len);
 	if (need_free) free(data);
 	pbuf_free(p);
 	return ERR_OK;
@@ -1843,13 +1670,11 @@ static void httpd_err(void *arg, err_t err) {
 		if (hs == hs_global)
 			hs_global = NULL;
 		httpd_state_reset(hs);
-		free(hs->reply);
-		free(hs->request);
 		free(hs);
 	}
 }
 
-static err_t httpd_poll_cb(void *arg, struct altcp_pcb *pcb) {
+static err_t httpd_poll_cb(void *arg, struct tcp_pcb *pcb) {
 	struct failsafe_httpd_state *hs = (struct failsafe_httpd_state *)arg;
 	if (hs == NULL)
 		return ERR_OK;
@@ -1867,7 +1692,7 @@ static err_t httpd_poll_cb(void *arg, struct altcp_pcb *pcb) {
 	return ERR_OK;
 }
 
-static err_t httpd_accept(void *arg, struct altcp_pcb *pcb, err_t err) {
+static err_t httpd_accept(void *arg, struct tcp_pcb *pcb, err_t err) {
 	struct failsafe_httpd_state *hs;
 
 	hs = malloc(sizeof(struct failsafe_httpd_state));
@@ -1880,47 +1705,39 @@ static err_t httpd_accept(void *arg, struct altcp_pcb *pcb, err_t err) {
 	hs->last_activity = get_timer(0);
 	hs->owns_global = 0;
 
-	altcp_arg(pcb, hs);
-	altcp_recv(pcb, httpd_recv);
-	altcp_sent(pcb, httpd_sent);
-	altcp_err(pcb, httpd_err);
-	altcp_poll(pcb, httpd_poll_cb, 1);
-	altcp_setprio(pcb, TCP_PRIO_MIN);
+	tcp_arg(pcb, hs);
+	tcp_recv(pcb, httpd_recv);
+	tcp_sent(pcb, httpd_sent);
+	tcp_err(pcb, httpd_err);
+	tcp_poll(pcb, httpd_poll_cb, 1);
+	tcp_setprio(pcb, TCP_PRIO_MIN);
 
 	return ERR_OK;
 }
 
-static struct altcp_pcb *listen_pcb;
-static u16_t recovery_port;
+static struct tcp_pcb *listen_pcb;
 
 void failsafe_httpd_init(void) {
-	struct altcp_pcb *pcb;
+	struct tcp_pcb *pcb;
 
 	fs_init();
 
-	recovery_port = recovery_tls_is_provisioned() ? 443 : 80;
-	pcb = recovery_port == 443 ? recovery_tls_new() :
-				    altcp_tcp_new_ip_type(IPADDR_TYPE_V4);
-	if (!pcb) {
-		printf("Unable to start recovery listener on port %u\n", recovery_port);
-		recovery_tls_release();
+	pcb = tcp_new();
+	if (pcb == NULL)
+		return;
+
+	if (tcp_bind(pcb, IP_ADDR_ANY, 80) != ERR_OK) {
+		tcp_close(pcb);
 		return;
 	}
 
-	if (altcp_bind(pcb, IP_ADDR_ANY, recovery_port) != ERR_OK) {
-		altcp_close(pcb);
-		recovery_tls_release();
-		return;
-	}
-
-	listen_pcb = altcp_listen(pcb);
+	listen_pcb = tcp_listen(pcb);
 	if (listen_pcb == NULL) {
-		altcp_close(pcb);
-		recovery_tls_release();
+		tcp_close(pcb);
 		return;
 	}
 
-	altcp_accept(listen_pcb, httpd_accept);
+	tcp_accept(listen_pcb, httpd_accept);
 }
 
 static struct netif failsafe_netif;
@@ -1933,21 +1750,25 @@ static void abort_port_pcb(struct tcp_pcb **list) {
 	struct tcp_pcb *pcb, *next;
 	for (pcb = *list; pcb != NULL; pcb = next) {
 		next = pcb->next;
-		if (pcb->local_port == recovery_port)
+		if (pcb->local_port == 80) {
+			tcp_arg(pcb, NULL);
+			tcp_err(pcb, NULL);
+			tcp_recv(pcb, NULL);
+			tcp_sent(pcb, NULL);
+			tcp_poll(pcb, NULL, 0);
 			tcp_abort(pcb);
+		}
 	}
 }
 
 void failsafe_httpd_stop(void) {
 	if (listen_pcb != NULL) {
-		altcp_close(listen_pcb);
+		tcp_close(listen_pcb);
 		listen_pcb = NULL;
 	}
 	abort_port_pcb(&tcp_active_pcbs);
 	abort_port_pcb(&tcp_tw_pcbs);
 	abort_port_pcb(&tcp_bound_pcbs);
-	recovery_tls_release();
-	webterm_reset();
 	hs_global = NULL;
 	netif_remove(&failsafe_netif);
 	httpd_progress_start_done = 0;
@@ -1987,10 +1808,6 @@ void failsafe_httpd_poll(void) {
 	if (!webfailsafe_is_running)
 		return;
 
-	if (recovery_tls_is_provisioned() && !hs_global &&
-	    !webfailsafe_ready_for_upgrade && upgrade_status != 2)
-		webterm_poll();
-
 	if (webfailsafe_ready_for_upgrade) {
 		webfailsafe_ready_for_upgrade = 0;
 		upgrade_status = 1;
@@ -2019,6 +1836,11 @@ void failsafe_httpd_poll(void) {
 			printf("reboot fail\n");
 		}
 		return;
+	}
+
+	if (webterm_run_pending_command()) {
+		if (!eth_is_active(eth_get_dev()))
+			eth_init_attempted = 0;
 	}
 
 #if defined(CONFIG_IPQ5332) || defined(CONFIG_IPQ9574)

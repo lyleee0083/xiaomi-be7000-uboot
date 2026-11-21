@@ -18,7 +18,7 @@
 
 ## Linux 构建
 
-Webfailsafe 保留分区备份和刷写功能。配对后的专用 MBN 在进入恢复模式时提供 HTTPS 和完整 U-Boot 网页终端。关闭自动重启后，可由配对管理员通过终端重启。ART 恢复接受与当前设备分区等长、通过 BE7000 无线校准校验的完整镜像。恢复前检查所有擦除块，按分区内的物理偏移写入并回读校验。
+Webfailsafe 通过 HTTP 提供上游原版网页终端、分区备份和刷写功能。网页终端无需登录，请在直连或可信网络中使用。关闭自动重启后，可在网页上手动重启设备。ART 恢复接受与当前设备分区等长、通过 BE7000 无线校准校验的完整镜像。恢复前检查所有擦除块，按分区内的物理偏移写入并回读校验。
 
 安装依赖（Ubuntu 24.04，使用与 CI 相同的 APT 快照及 Node.js 24.15.0）
 
@@ -45,21 +45,6 @@ npm ci --prefix failsafe/html --ignore-scripts --no-audit --no-fund
 
 GitHub Actions 的 **Build Xiaomi BE7000 U-Boot** 工作流支持 `main` 推送和手动运行，成功后可在该次运行的 Artifacts 直接下载 `openwrt-ipq9574_xiaomi_be7000-u-boot-<版本>.mbn`。
 版本由 `.github/workflows/build-ipq-uboot.yml` 中的 `ARTIFACT_VERSION` 指定。更新仓库并准备生成下一版产物时递增版本，例如从 `0.0.1` 升到 `0.0.2`。同一版本的重跑沿用原版本号。
-
-## 使用网页终端
-
-从 Actions 取得编译好的通用 MBN 模板。要用网线和浏览器访问完整终端，在自己的电脑生成专用 MBN 和浏览器证书。配对证书及专用 MBN 存放在个人目录。
-
-~~~bash
-python -X utf8 -m pip install cryptography
-python -X utf8 tools/pair_webterm.py openwrt-ipq9574_xiaomi_be7000-u-boot-0.0.4.mbn private-be7000
-~~~
-
-工具会要求为浏览器证书文件设置密码。将 `BE7000-trusted-ca.cer` 导入当前用户的受信任根证书存储，将 `BE7000-browser.pfx` 导入当前用户的个人证书存储。刷入 `BE7000-personal.mbn` 后，进入 Webfailsafe 并直接打开 https://192.168.1.1/，浏览器选择已导入的管理员证书即可看到 U-Boot 终端。如果恢复地址不同，生成材料时用 `--ip` 指定设备实际使用的 IPv4 地址。
-
-网页终端可执行设备编译支持的 U-Boot 命令。遇到命令提示输入时，在同一输入框填写后点击「发送输入」。
-
-专用 MBN 使用客户端证书保护整个 Webfailsafe 管理入口。通用模板沿用 HTTP 恢复页面，终端入口只接受已配对固件上的 HTTPS 连接。
 
 ## 许可与声明
 

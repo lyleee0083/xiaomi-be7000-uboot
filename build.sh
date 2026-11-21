@@ -81,18 +81,6 @@ for tool in "$TARGETCC" "${CROSS_COMPILE}strip"; do
 	fi
 done
 
-mbedtls_commit=068ff080b369adfac81509f9b57b2afabaf82dc5
-mbedtls_source=failsafe/mbedtls-source
-if [[ ! -e "$mbedtls_source" ]]; then
-	git init "$mbedtls_source"
-	git -C "$mbedtls_source" fetch --depth=1 https://github.com/Mbed-TLS/mbedtls.git "$mbedtls_commit"
-	git -C "$mbedtls_source" checkout --detach FETCH_HEAD
-fi
-if [[ $(git -C "$mbedtls_source" rev-parse --verify HEAD) != "$mbedtls_commit" ]]; then
-	printf 'Mbed TLS source must be at %s.\n' "$mbedtls_commit" >&2
-	exit 1
-fi
-
 make clean
 make "$defconfig"
 make -j"$(nproc)"

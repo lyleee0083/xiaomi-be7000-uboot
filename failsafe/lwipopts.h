@@ -24,10 +24,6 @@
 
 #define LWIP_UDP                         0
 #define LWIP_TCP                         1
-#define LWIP_ALTCP                      1
-#define LWIP_ALTCP_TLS                  1
-#define LWIP_ALTCP_TLS_MBEDTLS          1
-#define MEMP_NUM_ALTCP_PCB              12
 #define LWIP_TCP_KEEPALIVE               0
 #define LWIP_SINGLE_NETIF                1
 #define TCP_MSS                           1446

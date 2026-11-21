@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  ARTIFACT_VERSION: '0.0.4'
+  ARTIFACT_VERSION: '0.0.5'
   APT_SNAPSHOT: '20261118T000000Z'
 
 jobs:

@@ -14,8 +14,9 @@
 				<li class="sidebar-nav-item active"><a href="update.html" target="content-frame"><svg class="icon" viewBox="0 0 24 24"><use href="icons.svg?v=f#icon-upload"/></svg>更新启动</a></li>
 				<li class="sidebar-nav-item"><a href="backup.html" target="content-frame"><svg class="icon" viewBox="0 0 24 24"><use href="icons.svg?v=f#icon-download"/></svg>备份分区</a></li>
 				<li class="sidebar-nav-item"><a href="img.html" target="content-frame"><svg class="icon" viewBox="0 0 24 24"><use href="icons.svg?v=f#icon-cpu"/></svg>编程模式</a></li>
-				<li class="sidebar-nav-item" id="termNav" hidden><a href="term.html" target="content-frame">U-Boot 终端</a></li>
+				<li class="sidebar-nav-item"><a href="term.html" target="content-frame"><svg class="icon" viewBox="0 0 24 24"><use href="icons.svg?v=f#icon-terminal"/></svg>终端变量</a></li>
 				<li class="sidebar-nav-item"><a href="about.html" target="content-frame"><svg class="icon" viewBox="0 0 24 24"><use href="icons.svg?v=f#icon-router"/></svg>关于设置</a></li>
+				<li class="sidebar-nav-item"><a href="javascript:void(0)" id="rebootBtn"><svg class="icon" viewBox="0 0 24 24"><use href="icons.svg?v=f#icon-refresh"/></svg>重启设备</a></li>
 			</ul>
 			<div class="theme-switch">主题 | <span id="themeSwitch">亮☀</span></div>
 		</aside>
@@ -29,7 +30,6 @@
 	<script>
 		(function () {
 			var frame = document.getElementById('content-frame');
-			document.getElementById('termNav').hidden = location.protocol !== 'https:';
 			var items = document.querySelectorAll('.sidebar-nav-item');
 			var links = document.querySelectorAll('.sidebar-nav-item a');
 			links.forEach(function (a) {
@@ -86,6 +86,13 @@
 
 			if (document.documentElement.getAttribute('data-theme') === 'light')
 				themeSw.textContent = '暗☾';
+
+			document.getElementById('rebootBtn').addEventListener('click', function () {
+				if (confirm('确认重启？')) {
+					fetch('/webterm/cmd', {method:'POST',headers:{'Content-Type':'text/plain'},body:'reset'});
+					try{frame.contentWindow.showStep(3,'设备重启中...',3);frame.contentWindow.pingDevice(3)}catch(e){frame.src='update.html#reboot'}
+				}
+			});
 
 			xhrGet('/about', function(data) {
 				var el = document.getElementById('uboot-version');

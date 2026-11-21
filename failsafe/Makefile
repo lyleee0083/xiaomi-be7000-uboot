@@ -7,18 +7,7 @@ LWIP_INC = -I$(srctree)/failsafe \
 	-I$(srctree)/failsafe/lwip/include \
 	-fno-strict-aliasing
 
-MBEDTLS_DIR = $(srctree)/failsafe/mbedtls-source
-MBEDTLS_LIBRARY = $(wildcard $(MBEDTLS_DIR)/library/*.c)
-ccflags-y += $(LWIP_INC) -DCONFIG_USE_STDINT -I$(srctree)/failsafe/tls \
-	-I$(MBEDTLS_DIR)/include -DMBEDTLS_CONFIG_FILE='"be7000_mbedtls_config.h"'
-
-obj-y += lwip/core/altcp.o
-obj-y += lwip/core/altcp_alloc.o
-obj-y += lwip/core/altcp_tcp.o
-obj-y += lwip/apps/altcp_tls/altcp_tls_mbedtls.o
-obj-y += lwip/apps/altcp_tls/altcp_tls_mbedtls_mem.o
-obj-y += tls/credentials.o tls/recovery_tls.o
-obj-y += $(patsubst $(MBEDTLS_DIR)/library/%.c,mbedtls-source/library/%.o,$(MBEDTLS_LIBRARY))
+ccflags-y += $(LWIP_INC)
 
 obj-y += failsafe_httpd.o
 obj-y += ethernetif.o

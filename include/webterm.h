@@ -1,21 +1,28 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
-#ifndef BE7000_WEBTERM_H
-#define BE7000_WEBTERM_H
-#include <linux/types.h>
+/*
+ * webterm.h - Web Terminal for U-Boot
+ * Header file for console output capture and web interface
+ */
 
-#define WEBTERM_COMMAND_MAX 4096
-#define WEBTERM_OUTPUT_MAX (12 * 1024)
+#ifndef _WEBTERM_H_
+#define _WEBTERM_H_
 
-int webterm_enqueue(const char *command, size_t length);
-void webterm_capture(const char *data, size_t length);
-size_t webterm_read(char *output, size_t length);
-int webterm_busy(void);
-int webterm_running(void);
-int webterm_input_pending(void);
-int webterm_send_input(const char *data, size_t length);
-int webterm_get_input(void);
-void webterm_abort(void);
-int webterm_abort_requested(void);
-void webterm_poll(void);
+#include "../failsafe/failsafe_httpd.h"
+
+struct failsafe_httpd_state;
+
+int webterm_init(void);
+
+void webterm_capture_output(const char *str);
+
+int webterm_get_output(char *buf, int size, int since);
+
 void webterm_reset(void);
-#endif
+
+void webterm_http_handler(struct failsafe_httpd_state *hs, char *data, int data_len);
+
+void webterm_puts(const char *str);
+void webterm_putc(const char c);
+
+int webterm_run_pending_command(void);
+
+#endif /* _WEBTERM_H_ */
