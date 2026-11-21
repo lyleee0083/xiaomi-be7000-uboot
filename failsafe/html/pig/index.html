@@ -14,6 +14,7 @@
 				<li class="sidebar-nav-item active"><a href="update.html" target="content-frame"><svg class="icon" viewBox="0 0 24 24"><use href="icons.svg?v=f#icon-upload"/></svg>更新启动</a></li>
 				<li class="sidebar-nav-item"><a href="backup.html" target="content-frame"><svg class="icon" viewBox="0 0 24 24"><use href="icons.svg?v=f#icon-download"/></svg>备份分区</a></li>
 				<li class="sidebar-nav-item"><a href="img.html" target="content-frame"><svg class="icon" viewBox="0 0 24 24"><use href="icons.svg?v=f#icon-cpu"/></svg>编程模式</a></li>
+				<li class="sidebar-nav-item" id="termNav" hidden><a href="term.html" target="content-frame">U-Boot 终端</a></li>
 				<li class="sidebar-nav-item"><a href="about.html" target="content-frame"><svg class="icon" viewBox="0 0 24 24"><use href="icons.svg?v=f#icon-router"/></svg>关于设置</a></li>
 			</ul>
 			<div class="theme-switch">主题 | <span id="themeSwitch">亮☀</span></div>
@@ -28,6 +29,7 @@
 	<script>
 		(function () {
 			var frame = document.getElementById('content-frame');
+			document.getElementById('termNav').hidden = location.protocol !== 'https:';
 			var items = document.querySelectorAll('.sidebar-nav-item');
 			var links = document.querySelectorAll('.sidebar-nav-item a');
 			links.forEach(function (a) {

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>U-Boot 终端</title>
+	<link rel="stylesheet" href="style.css">
+	<script src="common.js"></script>
+	<script src="term.js" defer></script>
+</head>
+<body>
+	<main>
+		<section class="card">
+			<h1>U-Boot 终端</h1>
+			<pre id="output" tabindex="0" aria-label="命令输出" style="min-height:18em;max-height:58vh;overflow:auto"></pre>
+			<form id="terminal">
+				<label for="command">U-Boot 命令</label>
+				<input id="command" type="text" autocomplete="off" spellcheck="false" required maxlength="4096">
+				<button id="execute" type="submit">执行</button>
+				<button id="abort" type="button" disabled>中断</button>
+			</form>
+			<p id="terminalStatus" role="status"></p>
+		</section>
+	</main>
+</body>
+</html>

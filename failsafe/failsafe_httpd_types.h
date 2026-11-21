@@ -2,7 +2,7 @@
 #define __FAILSAFE_HTTPD_TYPES_H__
 
 #include "lwip/opt.h"
-#include "lwip/tcp.h"
+#include "lwip/altcp.h"
 
 #define STATE_NONE            0
 #define STATE_FILE_REQUEST    1
@@ -17,7 +17,10 @@ struct failsafe_httpd_state {
 	u32_t upload;
 	u32_t upload_total;
 	u8_t owns_global;
-	struct tcp_pcb *pcb;
+	struct altcp_pcb *pcb;
+	char *request;
+	char *reply;
+	unsigned int request_len;
 };
 
 void failsafe_lwip_init(struct ip4_addr *ipaddr, struct ip4_addr *netmask, struct ip4_addr *gw);

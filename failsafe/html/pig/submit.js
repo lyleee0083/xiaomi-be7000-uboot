@@ -82,6 +82,7 @@ function handleSubmit(e) {
 
 	fetch('/', {
 		method: 'POST',
+		headers: { 'X-BE7000-Request': '1' },
 		body: new FormData(form)
 	}).then(function(resp) {
 		if (!resp.ok) return showFail();

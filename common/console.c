@@ -18,6 +18,8 @@
 #include <environment.h>
 #ifdef CONFIG_LWIP_HTTPD
 #include "../failsafe/failsafe_httpd.h"
+#include <watchdog.h>
+#include <webterm.h>
 #endif
 
 DECLARE_GLOBAL_DATA_PTR;
@@ -371,7 +373,20 @@ int fprintf(int file, const char *fmt, ...)
 
 /** U-Boot INITIAL CONSOLE-COMPATIBLE FUNCTION *****************************/
 
-int getc(void)
+#ifdef CONFIG_LWIP_HTTPD
+extern int webfailsafe_is_running;
+extern void sys_check_timeouts(void);
+
+static void webterm_service_input(void)
+{
+	if (webfailsafe_is_running && webterm_running()) {
+		eth_rx();
+		sys_check_timeouts();
+	}
+}
+#endif
+
+static int console_input_get(void)
 {
 #ifdef CONFIG_DISABLE_CONSOLE
 	if (gd->flags & GD_FLG_DISABLE_CONSOLE)
@@ -399,7 +414,7 @@ int getc(void)
 	return serial_getc();
 }
 
-int tstc(void)
+static int console_input_ready(void)
 {
 #ifdef CONFIG_DISABLE_CONSOLE
 	if (gd->flags & GD_FLG_DISABLE_CONSOLE)
@@ -421,6 +436,31 @@ int tstc(void)
 
 	/* Send directly to the handler */
 	return serial_tstc();
+}
+
+int getc(void)
+{
+#ifdef CONFIG_LWIP_HTTPD
+	while (webfailsafe_is_running && webterm_running()) {
+		webterm_service_input();
+		if (webterm_input_pending())
+			return webterm_get_input();
+		if (console_input_ready())
+			break;
+		WATCHDOG_RESET();
+	}
+#endif
+	return console_input_get();
+}
+
+int tstc(void)
+{
+#ifdef CONFIG_LWIP_HTTPD
+	webterm_service_input();
+	if (webterm_input_pending())
+		return 1;
+#endif
+	return console_input_ready();
 }
 
 #define PRE_CONSOLE_FLUSHPOINT1_SERIAL			0
@@ -473,6 +513,9 @@ static inline void print_pre_console_buffer(int flushpoint) {}
 
 void putc(const char c)
 {
+#ifdef CONFIG_LWIP_HTTPD
+	webterm_capture(&c, 1);
+#endif
 #ifdef CONFIG_SANDBOX
 	/* sandbox can send characters to stdout before it has a console */
 	if (!gd || !(gd->flags & GD_FLG_SERIAL_READY)) {
@@ -517,6 +560,9 @@ void putc(const char c)
 
 void puts(const char *s)
 {
+#ifdef CONFIG_LWIP_HTTPD
+	webterm_capture(s, strlen(s));
+#endif
 #ifdef CONFIG_SANDBOX
 	if (!gd || !(gd->flags & GD_FLG_SERIAL_READY)) {
 		os_puts(s);
@@ -593,11 +639,6 @@ void console_record_reset_enable(void)
 static int ctrlc_disabled = 0;	/* see disable_ctrl() */
 static int ctrlc_was_pressed = 0;
 
-#ifdef CONFIG_LWIP_HTTPD
-extern int webfailsafe_is_running;
-extern void sys_check_timeouts(void);
-#endif
-
 int ctrlc(void)
 {
 #ifndef CONFIG_SANDBOX
@@ -608,10 +649,14 @@ int ctrlc(void)
 				sys_check_timeouts();
 			}
 		}
+		if (webterm_abort_requested()) {
+			ctrlc_was_pressed = 1;
+			return 1;
+		}
 #endif
 
-		if (tstc()) {
-			switch (getc()) {
+		if (console_input_ready()) {
+			switch (console_input_get()) {
 			case 0x03:		/* ^C - Control C */
 				ctrlc_was_pressed = 1;
 				return 1;
