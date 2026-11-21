@@ -95,27 +95,58 @@ static int art_read(u64 offset, size_t size, void *buf)
 
 /* offset is a full erase block already validated against region->size. */
 static int art_write_block(const struct art_region *region, u64 offset,
-			   const void *block, void *readback)
+			   const void *block, void *readback, const char *operation)
 {
 	struct erase_info erase = { 0 };
+	const char *stage = "bad-block check";
 	size_t written;
 	int ret;
 
 	erase.mtd = region->mtd;
 	erase.addr = region->base + offset;
 	erase.len = ART_ERASE_SIZE;
+	ret = mtd_block_isbad(region->mtd, erase.addr);
+	if (ret) {
+		if (ret > 0)
+			ret = -EIO;
+		goto fail;
+	}
+	stage = "erase";
 	ret = mtd_erase(region->mtd, &erase);
 	if (ret)
-		return ret;
+		goto fail;
+	stage = "write";
 	ret = mtd_write(region->mtd, erase.addr, ART_ERASE_SIZE, &written, block);
 	if (ret)
-		return ret;
-	if (written != ART_ERASE_SIZE)
-		return -EIO;
-	ret = art_read_region(region, offset, ART_ERASE_SIZE, readback);
-	if (!ret && memcmp(block, readback, ART_ERASE_SIZE))
+		goto fail;
+	if (written != ART_ERASE_SIZE) {
 		ret = -EIO;
+		goto fail;
+	}
+	stage = "readback";
+	ret = art_read_region(region, offset, ART_ERASE_SIZE, readback);
+	if (ret)
+		goto fail;
+	if (memcmp(block, readback, ART_ERASE_SIZE)) {
+		stage = "readback comparison";
+		ret = -EIO;
+		goto fail;
+	}
+	return 0;
+
+fail:
+	printf("ART %s failed at offset 0x%llx during %s (%d)\n",
+	       operation, (unsigned long long)offset, stage, ret);
 	return ret;
+}
+
+static int art_restore_block(const struct art_region *region, u64 offset,
+			     const void *original, void *readback)
+{
+	if (!art_read_region(region, offset, ART_ERASE_SIZE, readback) &&
+	    !memcmp(original, readback, ART_ERASE_SIZE))
+		return 0;
+	return art_write_block(region, offset, original, readback, "rollback");
 }
 
 static int art_write(u64 offset, size_t size, const void *buf)
@@ -123,7 +154,7 @@ static int art_write(u64 offset, size_t size, const void *buf)
 	struct art_region region;
 	u64 block_offset;
 	size_t in_block;
-	u8 *block, *readback;
+	u8 *original, *block, *readback;
 	int ret;
 
 	ret = art_get_region(&region);
@@ -134,19 +165,25 @@ static int art_write(u64 offset, size_t size, const void *buf)
 		return -EINVAL;
 	block_offset = offset - in_block;
 
-	block = memalign(ARCH_DMA_MINALIGN, ART_ERASE_SIZE * 2);
-	if (!block)
+	original = memalign(ARCH_DMA_MINALIGN, ART_ERASE_SIZE * 3);
+	if (!original)
 		return -ENOMEM;
+	block = original + ART_ERASE_SIZE;
 	readback = block + ART_ERASE_SIZE;
 
-	ret = art_read_region(&region, block_offset, ART_ERASE_SIZE, block);
+	ret = art_read_region(&region, block_offset, ART_ERASE_SIZE, original);
 	if (ret)
 		goto out;
+	if (!memcmp(original + in_block, buf, size))
+		goto out;
 
+	memcpy(block, original, ART_ERASE_SIZE);
 	memcpy(block + in_block, buf, size);
-	ret = art_write_block(&region, block_offset, block, readback);
+	ret = art_write_block(&region, block_offset, block, readback, "MAC update");
+	if (ret && art_restore_block(&region, block_offset, original, readback))
+		printf("ART rollback incomplete: retain the device-specific backup and do not reboot\n");
 out:
-	free(block);
+	free(original);
 	return ret;
 }
 
@@ -181,8 +218,9 @@ int macaddr_restore_art_image(const void *image, size_t size)
 {
 	struct art_region region;
 	const u8 *bytes = image;
-	void *readback;
-	size_t offset;
+	u8 *original = NULL, *readable = NULL, *readback = NULL;
+	size_t offset, index;
+	int rollback_failed = 0;
 	int ret = art_get_region(&region);
 
 	if (ret)
@@ -192,23 +230,70 @@ int macaddr_restore_art_image(const void *image, size_t size)
 		return -EINVAL;
 	}
 
-	/* Never skip bad NAND blocks. ART offsets are physical and calibration
-	 * data must not shift or be written beyond this partition. */
-	for (offset = 0; offset < size; offset += ART_ERASE_SIZE) {
-		ret = mtd_block_isbad(region.mtd, region.base + offset);
-		if (ret)
-			return ret < 0 ? ret : -EIO;
+	original = memalign(ARCH_DMA_MINALIGN, size);
+	readback = memalign(ARCH_DMA_MINALIGN, ART_ERASE_SIZE);
+	readable = calloc(size / ART_ERASE_SIZE, 1);
+	if (!original || !readable || !readback) {
+		ret = -ENOMEM;
+		goto out;
 	}
 
-	readback = memalign(ARCH_DMA_MINALIGN, ART_ERASE_SIZE);
-	if (!readback)
-		return -ENOMEM;
+	/* Check every physical block and preserve its contents before erasing. */
 	for (offset = 0; offset < size; offset += ART_ERASE_SIZE) {
-		ret = art_write_block(&region, offset, bytes + offset, readback);
-		if (ret)
-			break;
+		ret = mtd_block_isbad(region.mtd, region.base + offset);
+		if (ret) {
+			printf("ART preflight bad-block check failed at offset 0x%zx (%d)\n",
+			       offset, ret);
+			if (ret > 0)
+				ret = -EIO;
+			goto out;
+		}
+		ret = art_read_region(&region, offset, ART_ERASE_SIZE, original + offset);
+		if (ret) {
+			/* An existing uncorrectable block can be repaired with the
+			 * supplied image, but has no previous bytes to roll back to. */
+			printf("ART preflight read failed at offset 0x%zx (%d)\n", offset, ret);
+			if (!mtd_is_eccerr(ret))
+				goto out;
+		} else {
+			readable[offset / ART_ERASE_SIZE] = 1;
+		}
 	}
+
+	for (offset = 0; offset < size; offset += ART_ERASE_SIZE) {
+		index = offset / ART_ERASE_SIZE;
+		if (readable[index] &&
+		    !memcmp(bytes + offset, original + offset, ART_ERASE_SIZE))
+			continue;
+		ret = art_write_block(&region, offset, bytes + offset, readback, "restore");
+		if (ret)
+			goto rollback;
+	}
+	ret = 0;
+	goto out;
+
+rollback:
+	/* Include the block that failed: erase may already have changed it. */
+	for (;;) {
+		index = offset / ART_ERASE_SIZE;
+		if (!readable[index]) {
+			printf("ART rollback unavailable at offset 0x%zx\n", offset);
+			rollback_failed = 1;
+		} else if (art_restore_block(&region, offset, original + offset, readback)) {
+			rollback_failed = 1;
+		}
+		if (!offset)
+			break;
+		offset -= ART_ERASE_SIZE;
+	}
+	if (rollback_failed)
+		printf("ART rollback incomplete: retain the device-specific backup and do not reboot\n");
+	else
+		printf("ART restore failed; original blocks verified after rollback\n");
+out:
+	free(readable);
 	free(readback);
+	free(original);
 	return ret;
 }
 

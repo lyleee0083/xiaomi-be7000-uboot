@@ -10,6 +10,12 @@
 <body class="iframe-content">
 	<div class="card">
 		<h2><svg class="icon" viewBox="0 0 24 24"><use href="icons.svg?v=f#icon-terminal"/></svg>终端变量</h2>
+		<div>
+			<label for="terminalToken">串口会话令牌</label>
+			<input id="terminalToken" type="password" maxlength="32" autocomplete="off">
+			<button type="button" id="terminalConnect">连接</button>
+			<span id="terminalAccess" role="status">终端已锁定</span>
+		</div>
 		<div class="terminal-container">
 			<a href="term.html" target="_blank" class="terminal-expand" id="expandBtn" title="独立窗口打开">⧉</a>
 			<div class="terminal-output-wrapper">
@@ -44,8 +50,9 @@
 	};
 	var POLL_INTERVAL = 500;
 	var POLL_FAST = 100;
-	var FETCH_OPTS = { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } };
-	var CMD_HEADERS = { 'Content-Type': 'text/plain' };
+	var tokenInput = document.getElementById('terminalToken');
+	var access = document.getElementById('terminalAccess');
+	var token = '';
 
 	var [terminalOutput, terminalInput, sendBtn, clearBtn, connectionStatus, abortBtn] =
 		['terminalOutput', 'terminalInput', 'sendBtn', 'clearBtn', 'connectionStatus', 'abortBtn'].map(document.getElementById, document);
@@ -53,13 +60,46 @@
 	var pollTimer = null;
 	var lastSeq = 0;
 
-	function postCommand(body) {
-		return fetch(URL.CMD, { method: 'POST', headers: CMD_HEADERS, body: body });
+	async function request(url, method, body) {
+		if (!token) throw new Error('Terminal locked');
+		var sentToken = token;
+		var response = await fetch(url, {
+			method: method,
+			body: body,
+			cache: 'no-store',
+			mode: 'same-origin',
+			headers: { 'X-Webterm-Token': sentToken, 'Content-Type': 'text/plain' }
+		});
+		if (sentToken !== token) throw new Error('Terminal session changed');
+		if (response.status === 403) {
+			token = '';
+			access.textContent = '终端已锁定，请检查串口授权和令牌';
+		}
+		if (!response.ok) throw new Error('Terminal response ' + response.status);
+		return response;
 	}
+
+	function postCommand(body) {
+		return request(URL.CMD, 'POST', body);
+	}
+
+	document.getElementById('terminalConnect').addEventListener('click', function () {
+		var value = tokenInput.value.trim();
+		if (!/^[a-f0-9]{32}$/i.test(value)) {
+			access.textContent = '令牌须为 32 位十六进制字符';
+			return;
+		}
+		token = value;
+		tokenInput.value = '';
+		lastSeq = 0;
+		terminalOutput.textContent = '';
+		access.textContent = '正在连接';
+		restartPollFast();
+	});
 
 	function restartPoll(delay) {
 		clearTimeout(pollTimer);
-		pollTimer = setTimeout(fetchStatus, delay);
+		if (token) pollTimer = setTimeout(fetchStatus, delay);
 	}
 
 	function restartPollFast() {
@@ -67,7 +107,7 @@
 	}
 
 	function postAndPoll(cmd) {
-		postCommand(cmd);
+		postCommand(cmd).catch(function () {});
 		restartPollFast();
 	}
 
@@ -78,15 +118,16 @@
 	async function fetchStatus() {
 		var ok = false, hasNewData = false;
 		try {
-			var response = await fetch(URL.STATUS, FETCH_OPTS);
+			var response = await request(URL.STATUS, 'GET');
 			if (response.ok) {
 				var seq = parseInt(await response.text(), 10);
 				if (seq !== lastSeq) {
-					await fetchOutput();
+					await fetchOutput(seq < lastSeq ? 0 : lastSeq);
 					lastSeq = seq;
 					hasNewData = true;
 				}
 				ok = true;
+				access.textContent = '已连接';
 			}
 		} catch (error) {}
 		connectionStatus.textContent = ok ? '✓' : '✗';
@@ -94,15 +135,13 @@
 		restartPoll(hasNewData ? POLL_FAST : POLL_INTERVAL);
 	}
 
-	async function fetchOutput() {
-		try {
-			var response = await fetch(URL.DATA + '?since=' + lastSeq, FETCH_OPTS);
-			var text = await response.text();
-			if (text) {
-				terminalOutput.textContent += text;
-				terminalOutput.scrollTo({ top: terminalOutput.scrollHeight, behavior: 'smooth' });
-			}
-		} catch (error) {}
+	async function fetchOutput(since) {
+		var response = await request(URL.DATA + '?since=' + since, 'GET');
+		var text = await response.text();
+		if (text) {
+			terminalOutput.textContent += text;
+			terminalOutput.scrollTo({ top: terminalOutput.scrollHeight, behavior: 'smooth' });
+		}
 	}
 
 	async function sendCommand() {
@@ -122,7 +161,7 @@
 
 	function clearTerminal() {
 		terminalOutput.textContent = '';
-		fetch(URL.RESET, { method: 'POST', headers: CMD_HEADERS }).catch(function() {});
+		request(URL.RESET, 'POST').then(function () { lastSeq = 0; }).catch(function () {});
 		updateButtonStyles();
 	}
 
@@ -138,7 +177,7 @@
 	}
 
 	function abortCommand() {
-		fetch(URL.ABORT, { method: 'POST', headers: CMD_HEADERS }).catch(function() {});
+		request(URL.ABORT, 'POST').catch(function () {});
 		restartPollFast();
 	}
 
@@ -149,7 +188,7 @@
 	abortBtn.addEventListener('click', abortCommand);
 
 	document.getElementById('rebootDev').addEventListener('click', function () {
-		if (confirm('确认重启？')) { postCommand('reset'); }
+		if (confirm('确认重启？')) { postCommand('reset').catch(function () {}); }
 	});
 
 	var expandBtn = document.getElementById('expandBtn');
@@ -193,7 +232,6 @@
 		if (confirm(msg)) { postAndPoll(cmd); }
 	});
 
-	restartPollFast();
 })();
 	</script>
 </body>

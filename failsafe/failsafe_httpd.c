@@ -63,6 +63,7 @@ extern void (*flashread_yield_fn)(void);
 #include "failsafe_httpd_types.h"
 #include "ethernetif.h"
 #include "fs_wrapper.h"
+#include "request.h"
 
 DECLARE_GLOBAL_DATA_PTR;
 
@@ -178,7 +179,8 @@ static void httpd_state_reset(struct failsafe_httpd_state *hs) {
 		int done = upload.done, failed = upload.failed;
 		hs->owns_global = 0;
 		hs_global = NULL;
-		tcp_setprio(hs->pcb, TCP_PRIO_MIN);
+		if (hs->pcb)
+			tcp_setprio(hs->pcb, TCP_PRIO_MIN);
 		memset(&upload, 0, sizeof(upload));
 		upload.done = done;
 		upload.failed = failed;
@@ -196,11 +198,30 @@ static void httpd_state_reset(struct failsafe_httpd_state *hs) {
 	}
 }
 
-static void httpd_conn_abort(struct failsafe_httpd_state *hs, struct tcp_pcb *pcb) {
+static void httpd_conn_dispose(struct failsafe_httpd_state *hs, struct tcp_pcb *pcb)
+{
 	tcp_arg(pcb, NULL);
+	tcp_recv(pcb, NULL);
+	tcp_sent(pcb, NULL);
+	tcp_err(pcb, NULL);
+	tcp_poll(pcb, NULL, 0);
 	httpd_state_reset(hs);
 	free(hs);
+}
+
+static void httpd_conn_abort(struct failsafe_httpd_state *hs, struct tcp_pcb *pcb)
+{
+	httpd_conn_dispose(hs, pcb);
 	tcp_abort(pcb);
+}
+
+static err_t httpd_conn_close(struct failsafe_httpd_state *hs, struct tcp_pcb *pcb)
+{
+	httpd_conn_dispose(hs, pcb);
+	if (tcp_close(pcb) == ERR_OK)
+		return ERR_OK;
+	tcp_abort(pcb);
+	return ERR_ABRT;
 }
 
 static err_t httpd_recv_abort(struct failsafe_httpd_state *hs, struct tcp_pcb *pcb, char *data, int need_free, struct pbuf *p) {
@@ -1033,33 +1054,44 @@ static void httpd_handle_btn_detect(struct failsafe_httpd_state *hs) {
 	httpd_send_static(hs, resp, len);
 }
 
-static void httpd_handle_env_set(struct failsafe_httpd_state *hs, char *data, int data_len) {
-	static char resp[128];
-	int len, ok = 0;
-	char *body = strstr(data, "\r\n\r\n");
-	if (body) {
-		body += 4;
-		char *amp = strchr(body, '&');
-		char name[64] = "", value[128] = "";
-		char *eq = strchr(body, '=');
-		if (eq && eq < (amp ? amp : body + strlen(body))) {
-			memcpy(name, body, eq - body);
-			name[eq - body] = '\0';
-			if (amp)
-				memcpy(value, eq + 1, amp - eq - 1);
-			else
-				strcpy(value, eq + 1);
-			if (strcmp(name, "reset_key") == 0 || strcmp(name, "config_name") == 0) {
-				setenv(name, value[0] ? value : NULL);
-				saveenv();
-				if (strcmp(name, "reset_key") == 0)
-					env_reset_gpio_invalidate();
-				ok = 1;
-			}
-		}
+static void httpd_handle_env_set(struct failsafe_httpd_state *hs, char *data, int data_len)
+{
+	static const char invalid[] = "HTTP/1.0 400 Bad Request\r\nConnection: close\r\n\r\nerror";
+	static const char failure[] = "HTTP/1.0 500 Internal Server Error\r\nConnection: close\r\n\r\nerror";
+	static const char success[] = "HTTP/1.0 200 OK\r\nConnection: close\r\n\r\nok";
+	char value[128], *saved = NULL;
+	const char *name, *prior;
+	size_t size;
+	const char *body = request_body(data, data_len, &size);
+
+	name = body ? request_env_value(body, size, value, sizeof(value)) : NULL;
+	if (!name) {
+		httpd_send_static(hs, invalid, sizeof(invalid) - 1);
+		return;
 	}
-	len = sprintf(resp, "HTTP/1.0 200 OK\r\nCache-Control: no-cache\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n%s", ok ? "ok" : "error");
-	httpd_send_static(hs, resp, len);
+
+	prior = getenv(name);
+	if (prior) {
+		saved = strdup(prior);
+		if (!saved)
+			goto failed;
+	}
+	if (setenv(name, *value ? value : NULL))
+		goto failed;
+	if (saveenv()) {
+		if (setenv(name, saved))
+			printf("Webfailsafe: could not restore %s in memory\n", name);
+		goto failed;
+	}
+	if (!strcmp(name, "reset_key"))
+		env_reset_gpio_invalidate();
+	free(saved);
+	httpd_send_static(hs, success, sizeof(success) - 1);
+	return;
+
+failed:
+	free(saved);
+	httpd_send_static(hs, failure, sizeof(failure) - 1);
 }
 
 static int mac_fmt(char *buf, const uchar *m, int first) {
@@ -1298,8 +1330,8 @@ static void httpd_handle_backup(struct failsafe_httpd_state *hs, char *data, int
 	backup.total_size = total_size;
 	strncpy(backup.part_name, part_name, sizeof(backup.part_name) - 1);
 	backup.part_name[sizeof(backup.part_name) - 1] = '\0';
-	flashread_yield_fn = flashread_yield;
-
+	/* Do not re-enter lwIP from the request callback holding hs and pcb. */
+	flashread_yield_fn = NULL;
 	if (backup.chunked) {
 		backup.total_chunks = (int)((total_size + ram_avail - 1) / ram_avail);
 		backup.chunk_num = 1;
@@ -1331,7 +1363,7 @@ static void httpd_handle_backup(struct failsafe_httpd_state *hs, char *data, int
 		backup.chunk_offset = 0;
 	}
 
-	httpd_poll_wait(1);
+	flashread_yield_fn = flashread_yield;
 
 	sprintf(filename, "%s%s.bin", part_name, raw ? "_oob" : "");
 	hdr_len = sprintf(part_json_buf, "HTTP/1.0 200 OK\r\n" "Content-Type: application/octet-stream\r\n"
@@ -1352,12 +1384,12 @@ static void httpd_handle_file_request(struct failsafe_httpd_state *hs, char *dat
 	struct fs_file fsfile;
 	u32_t i;
 
-	if (memcmp((const void *)&data[4], "/cgi-bin/", 9) == 0) {
+	if (!strncmp(data + 4, "/cgi-bin/", 9)) {
 		httpd_send_static(hs, "HTTP/1.0 302 Found\r\nLocation: /index.html\r\n\r\n", 44);
 		return;
 	}
 
-	for (i = 4; i < 30; i++) {
+	for (i = 4; i < (u32_t)data_len && i < 30; i++) {
 		if (is_http_whitespace(data[i])) {
 			data[i] = 0;
 			i = 0;
@@ -1365,8 +1397,8 @@ static void httpd_handle_file_request(struct failsafe_httpd_state *hs, char *dat
 		}
 	}
 	if (i != 0) {
-		print_error("request file name too long!");
-		httpd_conn_abort(hs, hs->pcb);
+		static const char bad_request[] = "HTTP/1.0 400 Bad Request\r\nConnection: close\r\n\r\n";
+		httpd_send_static(hs, bad_request, sizeof(bad_request) - 1);
 		return;
 	}
 
@@ -1519,9 +1551,7 @@ static err_t httpd_sent(void *arg, struct tcp_pcb *pcb, u16_t len) {
 			upload.done = 0;
 			upload.failed = 0;
 		}
-		httpd_state_reset(hs);
-		tcp_close(pcb);
-		return ERR_OK;
+		return httpd_conn_close(hs, pcb);
 	}
 
 	httpd_send_data(hs);
@@ -1539,11 +1569,8 @@ static err_t httpd_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t er
 		return ERR_OK;
 	}
 
-	if (p == NULL) {
-		httpd_state_reset(hs);
-		tcp_close(pcb);
-		return ERR_OK;
-	}
+	if (p == NULL)
+		return httpd_conn_close(hs, pcb);
 
 	hs->last_activity = (u32_t)get_timer(0);
 
@@ -1667,8 +1694,8 @@ static err_t httpd_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t er
 static void httpd_err(void *arg, err_t err) {
 	struct failsafe_httpd_state *hs = (struct failsafe_httpd_state *)arg;
 	if (hs) {
-		if (hs == hs_global)
-			hs_global = NULL;
+		/* lwIP may already have freed the PCB before reporting the error. */
+		hs->pcb = NULL;
 		httpd_state_reset(hs);
 		free(hs);
 	}
@@ -1680,8 +1707,6 @@ static err_t httpd_poll_cb(void *arg, struct tcp_pcb *pcb) {
 		return ERR_OK;
 
 	if (get_timer(hs->last_activity) >= 300000) {
-		if (hs == hs_global)
-			hs_global = NULL;
 		httpd_conn_abort(hs, pcb);
 		return ERR_ABRT;
 	}
@@ -1750,18 +1775,17 @@ static void abort_port_pcb(struct tcp_pcb **list) {
 	struct tcp_pcb *pcb, *next;
 	for (pcb = *list; pcb != NULL; pcb = next) {
 		next = pcb->next;
-		if (pcb->local_port == 80) {
-			tcp_arg(pcb, NULL);
-			tcp_err(pcb, NULL);
-			tcp_recv(pcb, NULL);
-			tcp_sent(pcb, NULL);
-			tcp_poll(pcb, NULL, 0);
+		if (pcb->local_port != 80)
+			continue;
+		if (pcb->errf == httpd_err && pcb->callback_arg)
+			httpd_conn_abort(pcb->callback_arg, pcb);
+		else
 			tcp_abort(pcb);
-		}
 	}
 }
 
 void failsafe_httpd_stop(void) {
+	webterm_lock();
 	if (listen_pcb != NULL) {
 		tcp_close(listen_pcb);
 		listen_pcb = NULL;
