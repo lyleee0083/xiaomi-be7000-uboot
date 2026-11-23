@@ -8,15 +8,12 @@
 #include <command.h>
 #include "../failsafe/failsafe_httpd.h"
 #include "../failsafe/failsafe_httpd_types.h"
-#include "../failsafe/request.h"
 #include <net.h>
 
 #define WEBTERM_BUFFER_SIZE 16384
 #define WEBTERM_LINE_SIZE 256
 #define WEBTERM_RESPONSE_SIZE 32768
 #define WEBTERM_MAX_CMD_LEN 4096
-#define WEBTERM_TOKEN_LEN 32
-#define WEBTERM_LEASE_MS (10 * 60 * 1000)
 
 struct webterm_buffer {
 	char *buffer;
@@ -36,15 +33,12 @@ volatile int webterm_abort_requested = 0;
 
 static char webterm_response_buf[WEBTERM_RESPONSE_SIZE];
 static char webterm_output_buf[WEBTERM_BUFFER_SIZE];
-static char webterm_token[WEBTERM_TOKEN_LEN];
-static ip4_addr_t webterm_peer;
-static ulong webterm_start;
-static int webterm_unlocked;
 
 static void webterm_batch_copy(const char *src, int len);
 static void webterm_flush_line(void);
 static void webterm_add_char(char c);
 static void webterm_respond(struct failsafe_httpd_state *hs, int code, const char *ctype, const char *fmt, ...);
+static int webterm_parse_post_body(char *data, int data_len, char *out, int out_size);
 
 int webterm_init(void) {
 	if (webterm_out.buffer)
@@ -74,83 +68,6 @@ void webterm_reset(void) {
 	webterm_output_seq = 0;
 	webterm_line_pos = 0;
 	webterm_prev_char_was_cr = 0;
-}
-
-void webterm_lock(void)
-{
-	webterm_unlocked = 0;
-	memset(webterm_token, 0, sizeof(webterm_token));
-	memset(webterm_pending_cmd, 0, sizeof(webterm_pending_cmd));
-	webterm_has_pending_cmd = 0;
-	webterm_abort_requested = 0;
-	webterm_reset();
-}
-
-static int webterm_active(void)
-{
-	if (webterm_unlocked && get_timer(webterm_start) >= WEBTERM_LEASE_MS)
-		webterm_lock();
-	return webterm_unlocked;
-}
-
-static int do_webterm_access(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
-{
-	ip4_addr_t peer;
-	size_t i;
-
-	if (argc == 2 && !strcmp(argv[1], "lock")) {
-		webterm_lock();
-		return CMD_RET_SUCCESS;
-	}
-	if (argc != 4 || strcmp(argv[1], "allow"))
-		return CMD_RET_USAGE;
-	/* A running recovery session cannot re-arm itself. */
-	if (webfailsafe_is_running) {
-		printf("Stop Webfailsafe before arming the web terminal from the local console\n");
-		return CMD_RET_FAILURE;
-	}
-	if (!ip4addr_aton(argv[2], &peer) || !ip4_addr_get_u32(&peer) ||
-	    ip4_addr_ismulticast(&peer) || ip4_addr_get_u32(&peer) == IPADDR_BROADCAST ||
-	    strlen(argv[3]) != WEBTERM_TOKEN_LEN) {
-		printf("Use one client IPv4 address and a fresh 32-digit random hex token\n");
-		return CMD_RET_FAILURE;
-	}
-	for (i = 0; i < WEBTERM_TOKEN_LEN; i++)
-		if (request_hex_digit(argv[3][i]) < 0)
-			return CMD_RET_FAILURE;
-
-	webterm_lock();
-	webterm_peer = peer;
-	memcpy(webterm_token, argv[3], sizeof(webterm_token));
-	webterm_start = get_timer(0);
-	webterm_unlocked = 1;
-	printf("Web terminal armed for one client for ten minutes. Use an isolated direct link.\n");
-	return CMD_RET_SUCCESS;
-}
-
-U_BOOT_CMD(
-	webterm, 4, 0, do_webterm_access,
-	"control the Webfailsafe terminal from the local console",
-	"allow <client-ipv4> <32-digit-hex-token>\n"
-	"webterm lock"
-);
-
-static int webterm_authorized(const struct failsafe_httpd_state *hs,
-			      const char *data, size_t size)
-{
-	const char *end = request_headers_end(data, size);
-	const char *token;
-	size_t i, length;
-	unsigned char difference = 0;
-
-	if (!end || !webterm_active() ||
-	    !ip4_addr_cmp(&webterm_peer, ip_2_ip4(&hs->pcb->remote_ip)) ||
-	    request_header(data, end, "X-Webterm-Token", &token, &length) != 1 ||
-	    length != WEBTERM_TOKEN_LEN)
-		return 0;
-	for (i = 0; i < WEBTERM_TOKEN_LEN; i++)
-		difference |= (unsigned char)(token[i] ^ webterm_token[i]);
-	return difference == 0;
 }
 
 static void webterm_flush_line(void) {
@@ -202,15 +119,14 @@ static void webterm_batch_copy(const char *src, int len) {
 }
 
 void webterm_capture_output(const char *str) {
-	if (!webterm_unlocked || !str || !webterm_out.buffer)
+	if (!str || !webterm_out.buffer)
 		return;
 	while (*str)
 		webterm_add_char(*str++);
 }
 
 void webterm_putc(const char c) {
-	if (webterm_unlocked)
-		webterm_add_char(c);
+	webterm_add_char(c);
 }
 
 int webterm_get_output(char *buf, int size, int since) {
@@ -251,7 +167,7 @@ void webterm_execute_command(const char *cmd) {
 }
 
 int webterm_run_pending_command(void) {
-	if (!webterm_active() || !webterm_has_pending_cmd)
+	if (!webterm_has_pending_cmd)
 		return 0;
 	webterm_has_pending_cmd = 0;
 	webterm_abort_requested = 0;
@@ -262,80 +178,89 @@ int webterm_run_pending_command(void) {
 
 static void webterm_respond(struct failsafe_httpd_state *hs, int code, const char *ctype, const char *fmt, ...) {
 	va_list ap;
-	int written;
-	const char *reason = code == 200 ? "OK" : code == 403 ? "Forbidden" :
-			     code == 404 ? "Not Found" : code == 405 ? "Method Not Allowed" : "Bad Request";
 	int hlen = snprintf(webterm_response_buf, sizeof(webterm_response_buf),
-		"HTTP/1.1 %d %s\r\nContent-Type: %s\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n", code, reason, ctype);
+		"HTTP/1.1 %d %s\r\nContent-Type: %s\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n", code, code == 200 ? "OK" : "405", ctype);
 	va_start(ap, fmt);
-	written = vsnprintf(webterm_response_buf + hlen, sizeof(webterm_response_buf) - hlen, fmt, ap);
+	hlen += vsnprintf(webterm_response_buf + hlen, sizeof(webterm_response_buf) - hlen, fmt, ap);
 	va_end(ap);
-	if (written > 0)
-		hlen += min(written, (int)sizeof(webterm_response_buf) - hlen - 1);
 	hs->state = STATE_FILE_REQUEST;
 	hs->dataptr = (u8_t *)webterm_response_buf;
 	hs->upload = hlen;
 	httpd_send_data(hs);
 }
 
-static int webterm_path_is(const char *path, const char *name)
-{
-	size_t len = strlen(name);
+static int webterm_parse_post_body(char *data, int data_len, char *out, int out_size) {
+	char *body = strstr(data, "\r\n\r\n"), *nl;
+	int body_len;
 
-	return !strncmp(path, name, len) && (path[len] == ' ' || path[len] == '?');
+	if (!body)
+		return -1;
+	body += 4;
+
+	body_len = data_len - (body - data);
+	if (body_len <= 0 || body_len > WEBTERM_MAX_CMD_LEN)
+		return -1;
+	if (body_len >= out_size)
+		body_len = out_size - 1;
+
+	memcpy(out, body, body_len);
+	out[body_len] = '\0';
+
+	nl = strpbrk(out, "\r\n");
+	if (nl) *nl = '\0';
+	return body_len;
 }
 
-void webterm_http_handler(struct failsafe_httpd_state *hs, char *data, int data_len)
-{
-	const char *path, *body;
+void webterm_http_handler(struct failsafe_httpd_state *hs, char *data, int data_len) {
+	const char *path;
 	int is_post, len, since;
-	char cmd[WEBTERM_MAX_CMD_LEN];
-	size_t length;
+	char *qp, cmd[WEBTERM_MAX_CMD_LEN];
 
-	if (!webterm_authorized(hs, data, data_len)) {
-		webterm_respond(hs, 403, "text/plain", "Terminal locked\n");
+	if (!hs || !data) return;
+
+	if (strncmp(data, "GET ", 4) == 0) {
+		path = data + 4;
+		is_post = 0;
+	} else if (strncmp(data, "POST ", 5) == 0) {
+		path = data + 5;
+		is_post = 1;
+	} else {
 		return;
 	}
-	is_post = !strncmp(data, "POST ", 5);
-	path = data + (is_post ? 5 : 4);
-	if (strncmp(path, "/webterm/", 9)) {
-		webterm_respond(hs, 404, "text/plain", "Unknown terminal route\n");
+
+	if (strncmp(path, "/webterm/", 9) != 0)
 		return;
-	}
 	path += 9;
 
-	if (is_post && webterm_path_is(path, "cmd")) {
-		body = request_body(data, data_len, &length);
-		if (!body || !length || length >= sizeof(cmd) ||
-		    memchr(body, '\r', length) || memchr(body, '\n', length)) {
-			webterm_respond(hs, 400, "text/plain", "Invalid command body\n");
-			return;
+	if (strncmp(path, "cmd", 3) == 0) {
+		if (is_post) {
+			if (webterm_parse_post_body(data, data_len, cmd, sizeof(cmd)) > 0)
+				webterm_execute_command(cmd);
 		}
-		memcpy(cmd, body, length);
-		cmd[length] = '\0';
-		webterm_execute_command(cmd);
-	} else if (is_post && webterm_path_is(path, "abort")) {
-		webterm_abort_requested = 1;
-	} else if (is_post && webterm_path_is(path, "reset")) {
+		webterm_respond(hs, is_post ? 200 : 405, "text/plain", is_post ? "OK\n" : "405\n");
+	} else if (strncmp(path, "abort", 5) == 0) {
+		if (is_post)
+			webterm_abort_requested = 1;
+		webterm_respond(hs, is_post ? 200 : 405, "text/plain", is_post ? "OK\n" : "405\n");
+	} else if (strncmp(path, "reset", 5) == 0) {
 		webterm_reset();
-	} else if (!is_post && webterm_path_is(path, "status")) {
+		webterm_respond(hs, 200, "text/plain", "OK\n");
+	} else if (is_post) {
+		return;
+	} else if (strncmp(path, "status", 6) == 0) {
 		if (webterm_line_pos > 0)
 			webterm_flush_line();
 		webterm_respond(hs, 200, "text/plain", "%d", webterm_output_seq);
-		return;
-	} else if (!is_post && webterm_path_is(path, "data")) {
+	} else if (strncmp(path, "data", 4) == 0) {
 		if (webterm_line_pos > 0)
 			webterm_flush_line();
-		since = !strncmp(path, "data?since=", 11) ? simple_strtol(path + 11, NULL, 10) : 0;
+		since = 0;
+		qp = strstr(path, "?since=");
+		if (qp)
+			since = simple_strtol(qp + 7, NULL, 10);
 		len = webterm_get_output(webterm_output_buf, sizeof(webterm_output_buf), since);
 		webterm_respond(hs, 200, "text/plain; charset=utf-8", "%s", len > 0 ? webterm_output_buf : "");
-		return;
-	} else {
-		webterm_respond(hs, 405, "text/plain", "Unsupported terminal request\n");
-		return;
 	}
-
-	webterm_respond(hs, 200, "text/plain", "OK\n");
 }
 
 void webterm_puts(const char *str) {
