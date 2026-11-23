@@ -17,6 +17,7 @@ struct failsafe_httpd_state {
 	u32_t upload;
 	u32_t upload_total;
 	u8_t owns_global;
+	u8_t upgrade_on_ack;
 	struct tcp_pcb *pcb;
 };
 

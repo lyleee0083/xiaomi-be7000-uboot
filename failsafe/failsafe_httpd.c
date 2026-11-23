@@ -96,7 +96,6 @@ static struct {
 	u32_t start_time;
 	int file_too_big;
 	int failed;
-	int done;
 } upload = { .packet_counter = 255 };
 
 static struct {
@@ -118,6 +117,14 @@ static struct {
 int upgrade_status = 0;
 static char part_json_buf[PART_JSON_BUF_SIZE];
 static struct failsafe_httpd_state *hs_global;
+static int backup_reading;
+static int upgrade_in_progress;
+
+static int httpd_transfer_busy(void)
+{
+	return hs_global || backup_reading || webfailsafe_ready_for_upgrade ||
+	       upgrade_in_progress;
+}
 
 static void httpd_poll_wait(int count);
 static int mac_fmt(char *buf, const uchar *m, int first);
@@ -175,15 +182,17 @@ static void httpd_state_reset(struct failsafe_httpd_state *hs) {
 	hs->dataptr = 0;
 	hs->upload = 0;
 	hs->upload_total = 0;
+	if (hs->upgrade_on_ack) {
+		/* A disconnected upload never reached its response ACK. */
+		hs->upgrade_on_ack = 0;
+		upgrade_status = 3;
+	}
 	if (hs->owns_global) {
-		int done = upload.done, failed = upload.failed;
 		hs->owns_global = 0;
 		hs_global = NULL;
 		if (hs->pcb)
 			tcp_setprio(hs->pcb, TCP_PRIO_MIN);
 		memset(&upload, 0, sizeof(upload));
-		upload.done = done;
-		upload.failed = failed;
 		upload.packet_counter = 255;
 		memset(&backup, 0, sizeof(backup));
 		flashread_yield_fn = NULL;
@@ -402,9 +411,11 @@ static void httpd_upload_complete(struct failsafe_httpd_state *hs) {
 		printf("  Done!\n");
 	}
 	led_on("blink_led");
-	upload.done = 1;
-	upgrade_status = 1;
-	net_boot_file_size = (ulong)hs->upload_total;
+	upgrade_status = upload.failed ? 3 : 1;
+	if (!upload.failed) {
+		net_boot_file_size = (ulong)hs->upload_total;
+		hs->upgrade_on_ack = 1;
+	}
 }
 
 static int httpd_check_upload_complete(struct failsafe_httpd_state *hs) {
@@ -412,7 +423,7 @@ static int httpd_check_upload_complete(struct failsafe_httpd_state *hs) {
 		httpd_upload_complete(hs);
 		static const char resp_ok[] = "HTTP/1.0 200 OK\r\nConnection: close\r\n\r\n";
 		static const char resp_err[] = "HTTP/1.0 500 Internal Server Error\r\nConnection: close\r\n\r\n";
-		httpd_state_reset(hs);
+		/* Keep transfer RAM reserved until this connection finishes. */
 		hs->state = STATE_FILE_REQUEST;
 		if (!upload.failed) {
 			hs->dataptr = (u8_t *)resp_ok;
@@ -478,6 +489,12 @@ static void httpd_send_static(struct failsafe_httpd_state *hs, const char *data,
 	hs->dataptr = (u8_t *)data;
 	hs->upload = len;
 	httpd_send_data(hs);
+}
+
+static void httpd_send_busy(struct failsafe_httpd_state *hs)
+{
+	static const char busy[] = "HTTP/1.0 503 Service Unavailable\r\nConnection: close\r\n\r\nTransfer busy";
+	httpd_send_static(hs, busy, sizeof(busy) - 1);
 }
 
 static void httpd_handle_upgrade_status(struct failsafe_httpd_state *hs) {
@@ -1286,6 +1303,7 @@ static void httpd_handle_partitions(struct failsafe_httpd_state *hs) {
 }
 
 static void httpd_handle_backup(struct failsafe_httpd_state *hs, char *data, int data_len) {
+	static char backup_header[256];
 	char *query = strchr(&data[4], '?'), part_name[64], filename[96], *size_param, *amp;
 	ulong offset, size;
 	int hdr_len, raw = 0;
@@ -1324,6 +1342,14 @@ static void httpd_handle_backup(struct failsafe_httpd_state *hs, char *data, int
 		return;
 	}
 
+	if (httpd_transfer_busy()) {
+		httpd_send_busy(hs);
+		return;
+	}
+	hs->owns_global = 1;
+	hs_global = hs;
+	tcp_setprio(hs->pcb, TCP_PRIO_NORMAL);
+
 	ram_avail = (u32_t)CONFIG_SYS_SDRAM_END - (u32_t)WEBFAILSAFE_UPLOAD_RAM_ADDRESS;
 	backup.chunked = (total_size > ram_avail) ? 1 : 0;
 	backup.raw = raw;
@@ -1338,7 +1364,8 @@ static void httpd_handle_backup(struct failsafe_httpd_state *hs, char *data, int
 		printf("Backup: %llu.%02llu MiB > RAM %u.%02u MiB %d chunks transfer\n", mib_int(total_size), mib_frac(total_size),
 			(u32)mib_int(ram_avail), (u32)mib_frac(ram_avail), backup.total_chunks);
 		char chunk_detail[32] = "";
-		if (flashread_partition_chunk(part_name, WEBFAILSAFE_UPLOAD_RAM_ADDRESS, 0, ram_avail, raw, NULL, &size, chunk_detail) != CMD_RET_SUCCESS) {
+		if (flashread_partition_chunk(part_name, WEBFAILSAFE_UPLOAD_RAM_ADDRESS, 0, ram_avail, raw, NULL, &size, chunk_detail) != CMD_RET_SUCCESS ||
+		    !size || size > ram_avail) {
 			static const char *err = "HTTP/1.0 500 Internal Server Error\r\nConnection: close\r\n\r\nRead failed";
 			httpd_send_static(hs, err, strlen(err));
 			return;
@@ -1351,7 +1378,8 @@ static void httpd_handle_backup(struct failsafe_httpd_state *hs, char *data, int
 		printf("Backup: %d/%d %llu.%02llu/%llu.%02llu MiB\n", backup.chunk_num, backup.total_chunks, mib_int(backup.total_sent), mib_frac(backup.total_sent),  mib_int(backup.total_size), mib_frac(backup.total_size));
 		backup.chunk_num++;
 	} else {
-		if (flashread_partition(part_name, WEBFAILSAFE_UPLOAD_RAM_ADDRESS, 0, raw, &offset, &size) != CMD_RET_SUCCESS) {
+		if (flashread_partition(part_name, WEBFAILSAFE_UPLOAD_RAM_ADDRESS, 0, raw, &offset, &size) != CMD_RET_SUCCESS ||
+		    !size || size != total_size) {
 			static const char *err = "HTTP/1.0 500 Internal Server Error\r\nConnection: close\r\n\r\nRead failed";
 			httpd_send_static(hs, err, strlen(err));
 			return;
@@ -1366,18 +1394,11 @@ static void httpd_handle_backup(struct failsafe_httpd_state *hs, char *data, int
 	flashread_yield_fn = flashread_yield;
 
 	sprintf(filename, "%s%s.bin", part_name, raw ? "_oob" : "");
-	hdr_len = sprintf(part_json_buf, "HTTP/1.0 200 OK\r\n" "Content-Type: application/octet-stream\r\n"
+	hdr_len = sprintf(backup_header, "HTTP/1.0 200 OK\r\n" "Content-Type: application/octet-stream\r\n"
 		"Content-Disposition: attachment; filename=\"%s\"\r\n" "Content-Length: %llu\r\n" "Connection: close\r\n\r\n", filename, total_size);
 
-	hs->state = STATE_FILE_REQUEST;
-	hs->owns_global = 1;
-	hs_global = hs;
-	tcp_setprio(hs->pcb, TCP_PRIO_NORMAL);
-	hs->dataptr = (u8_t *)part_json_buf;
-	hs->upload = hdr_len;
-	httpd_send_data(hs);
-
 	backup.sending_header = 1;
+	httpd_send_static(hs, backup_header, hdr_len);
 }
 
 static void httpd_handle_file_request(struct failsafe_httpd_state *hs, char *data, int data_len) {
@@ -1476,42 +1497,45 @@ void httpd_send_data(struct failsafe_httpd_state *hs) {
 	tcp_output(hs->pcb);
 }
 
-static void backup_chunk_next(void) {
-	u32_t ram_avail = (u32_t)CONFIG_SYS_SDRAM_END - (u32_t)WEBFAILSAFE_UPLOAD_RAM_ADDRESS,
-		  chunk_size = (backup.total_remaining > ram_avail) ? ram_avail : (u32)backup.total_remaining;
-	ulong rd_size;
+static void backup_chunk_next(void)
+{
+	u32_t ram_avail = (u32_t)CONFIG_SYS_SDRAM_END - (u32_t)WEBFAILSAFE_UPLOAD_RAM_ADDRESS;
+	u32_t chunk_size = min_t(u64, backup.total_remaining, ram_avail);
+	char part_name[sizeof(backup.part_name)];
 	char chunk_detail[32] = "";
+	ulong rd_size;
+	int ret;
 
-	if (flashread_partition_chunk(backup.part_name, WEBFAILSAFE_UPLOAD_RAM_ADDRESS, backup.chunk_offset, chunk_size, backup.raw, NULL, &rd_size, chunk_detail) == CMD_RET_SUCCESS && rd_size > 0) {
-		backup.data_addr = (u32_t)WEBFAILSAFE_UPLOAD_RAM_ADDRESS;
-		backup.data_size = (u32_t)rd_size;
-		backup.chunk_offset += backup.data_size;
-		backup.total_sent += backup.data_size;
-		if (backup.total_sent > backup.total_size) {
-			backup.data_size -= (u32_t)(backup.total_sent - backup.total_size);
-			backup.total_sent = backup.total_size;
-		}
-		backup.total_remaining = backup.total_size - backup.total_sent;
-		printf("Backup: %d/%d %llu.%02llu/%llu.%02llu MiB\n", backup.chunk_num, backup.total_chunks, mib_int(backup.total_sent), mib_frac(backup.total_sent), mib_int(backup.total_size), mib_frac(backup.total_size));
-		backup.chunk_num++;
-		httpd_poll_wait(2);
-		if (hs_global) {
-			hs_global->dataptr = (u8_t *)(uintptr_t)backup.data_addr;
-			hs_global->upload = backup.data_size;
-			httpd_send_data(hs_global);
-			backup.chunk_busy = 0;
-		} else {
-			backup.chunked = 0;
-			backup.total_remaining = 0;
-			backup.chunk_busy = 0;
-		}
-	} else {
+	/* The read can yield to lwIP. Keep the RAM reserved even if the
+	 * owner disconnects and the callback clears the backup state. */
+	memcpy(part_name, backup.part_name, sizeof(part_name));
+	backup_reading = 1;
+	ret = flashread_partition_chunk(part_name, WEBFAILSAFE_UPLOAD_RAM_ADDRESS,
+					backup.chunk_offset, chunk_size, backup.raw,
+					NULL, &rd_size, chunk_detail);
+	backup_reading = 0;
+	if (!hs_global)
+		return;
+
+	if (ret != CMD_RET_SUCCESS || !rd_size || rd_size > ram_avail ||
+	    rd_size > backup.total_remaining) {
 		printf("Backup: chunk failed at offset %llu.%02llu MiB\n",
-			mib_int(backup.chunk_offset), mib_frac(backup.chunk_offset));
-		backup.chunk_busy = 0;
-		backup.chunked = 0;
-		backup.total_remaining = 0;
+		       mib_int(backup.chunk_offset), mib_frac(backup.chunk_offset));
+		httpd_conn_abort(hs_global, hs_global->pcb);
+		return;
 	}
+
+	backup.chunk_offset += rd_size;
+	backup.total_sent += rd_size;
+	backup.total_remaining -= rd_size;
+	printf("Backup: %d/%d %llu.%02llu/%llu.%02llu MiB\n", backup.chunk_num,
+	       backup.total_chunks, mib_int(backup.total_sent), mib_frac(backup.total_sent),
+	       mib_int(backup.total_size), mib_frac(backup.total_size));
+	backup.chunk_num++;
+	backup.chunk_busy = 0;
+	hs_global->dataptr = (u8_t *)WEBFAILSAFE_UPLOAD_RAM_ADDRESS;
+	hs_global->upload = rd_size;
+	httpd_send_data(hs_global);
 }
 
 static void httpd_poll_wait(int count) {
@@ -1523,39 +1547,40 @@ static void httpd_poll_wait(int count) {
 	}
 }
 
-static err_t httpd_sent(void *arg, struct tcp_pcb *pcb, u16_t len) {
-	struct failsafe_httpd_state *hs = (struct failsafe_httpd_state *)arg;
+static err_t httpd_sent(void *arg, struct tcp_pcb *pcb, u16_t len)
+{
+	struct failsafe_httpd_state *hs = arg;
 
-	if (hs == NULL)
+	if (!hs)
+		return ERR_OK;
+	hs->last_activity = (u32_t)get_timer(0);
+	if (hs->state != STATE_FILE_REQUEST)
+		return ERR_OK;
+	if (hs->upload) {
+		httpd_send_data(hs);
+		return ERR_OK;
+	}
+	if (pcb->unacked || pcb->unsent)
 		return ERR_OK;
 
-	hs->last_activity = (u32_t)get_timer(0);
-
-	if (backup.sending_header && hs->upload <= 0) {
-		backup.sending_header = 0;
-		hs->state = STATE_FILE_REQUEST;
-		hs->dataptr = (u8_t *)(uintptr_t)backup.data_addr;
-		hs->upload = backup.data_size;
-	}
-
-	if (hs->upload <= 0) {
-		if (backup.chunked && backup.total_remaining > 0 && !backup.chunk_busy) {
+	if (hs == hs_global) {
+		if (backup.sending_header) {
+			backup.sending_header = 0;
+			hs->dataptr = (u8_t *)(uintptr_t)backup.data_addr;
+			hs->upload = backup.data_size;
+			httpd_send_data(hs);
+			return ERR_OK;
+		}
+		if (backup.chunked && backup.total_remaining) {
 			backup.chunk_busy = 1;
 			return ERR_OK;
 		}
-		if (backup.chunk_busy)
-			return ERR_OK;
-		if (upload.done) {
-			if (!upload.failed)
-				webfailsafe_ready_for_upgrade = 1;
-			upload.done = 0;
-			upload.failed = 0;
+		if (hs->upgrade_on_ack) {
+			hs->upgrade_on_ack = 0;
+			webfailsafe_ready_for_upgrade = 1;
 		}
-		return httpd_conn_close(hs, pcb);
 	}
-
-	httpd_send_data(hs);
-	return ERR_OK;
+	return httpd_conn_close(hs, pcb);
 }
 
 static err_t httpd_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
@@ -1639,7 +1664,10 @@ static err_t httpd_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t er
 				httpd_handle_mac_set(hs, data, data_len);
 				break;
 			}
-			data[data_len] = '\0';
+			if (httpd_transfer_busy()) {
+				httpd_send_busy(hs);
+				break;
+			}
 			if (httpd_parse_content_length(hs, data) < 0)
 				return httpd_recv_abort(hs, pcb, data, need_free, p);
 			hs->state = STATE_UPLOAD_REQUEST;
@@ -1711,7 +1739,7 @@ static err_t httpd_poll_cb(void *arg, struct tcp_pcb *pcb) {
 		return ERR_ABRT;
 	}
 
-	if (hs->upload > 0)
+	if (hs->state == STATE_FILE_REQUEST && hs->upload > 0)
 		httpd_send_data(hs);
 
 	return ERR_OK;
@@ -1832,6 +1860,7 @@ void failsafe_httpd_poll(void) {
 		return;
 
 	if (webfailsafe_ready_for_upgrade) {
+		upgrade_in_progress = 1;
 		webfailsafe_ready_for_upgrade = 0;
 		upgrade_status = 1;
 		setenv_hex("filesize", net_boot_file_size);
@@ -1848,6 +1877,7 @@ void failsafe_httpd_poll(void) {
 			do_http_progress(WEBFAILSAFE_PROGRESS_UPGRADE_FAILED);
 			upgrade_status = 3;
 			httpd_poll_wait(2000);
+			upgrade_in_progress = 0;
 			return;
 		}
 		upgrade_status = webfailsafe_auto_reboot_enabled ? 4 : 5;
@@ -1858,6 +1888,7 @@ void failsafe_httpd_poll(void) {
 			do_reset(NULL, 0, 0, NULL);
 			printf("reboot fail\n");
 		}
+		upgrade_in_progress = 0;
 		return;
 	}
 
