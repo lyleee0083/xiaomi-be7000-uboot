@@ -1785,7 +1785,6 @@ static void abort_port_pcb(struct tcp_pcb **list) {
 }
 
 void failsafe_httpd_stop(void) {
-	webterm_lock();
 	if (listen_pcb != NULL) {
 		tcp_close(listen_pcb);
 		listen_pcb = NULL;
