@@ -517,7 +517,7 @@ int flashread_partition_chunk(const char *part_name, u32 load_addr, u64 user_off
 #ifdef CONFIG_CMD_NAND
 	int nand_dev, nand_ret;
 	struct mtd_info *mtd;
-	u64 remain, cur_offset, end_offset;
+	u64 region_base = 0, region_size, remain, cur_offset;
 	u32 chunk_size, erasesize;
 	size_t left_to_read, block_offset, read_length;
 	u_char *p_buf;
@@ -532,34 +532,56 @@ int flashread_partition_chunk(const char *part_name, u32 load_addr, u64 user_off
 #else
 		nand_dev = CONFIG_NAND_FLASH_INFO_IDX;
 #endif
+		if (nand_dev < 0)
+			return CMD_RET_FAILURE;
 		mtd = &nand_info[nand_dev];
-		remain = (user_offset < mtd->size) ? mtd->size - user_offset : 0;
-		chunk_size = (user_size && (u64)user_size < remain) ? user_size : (u32)remain;
-		left_to_read = chunk_size;
-		cur_offset = user_offset;
-		end_offset = user_offset + chunk_size;
-		p_buf = (u_char *)(uintptr_t)load_addr;
 		erasesize = mtd->erasesize;
+		if (!erasesize || (erasesize & (erasesize - 1)))
+			return CMD_RET_FAILURE;
+
+		region_size = mtd->size;
+		if (strcmp(part_name, "nand_full")) {
+			u32 start_block, size_blocks;
+
+			if (!sfi->flash_block_size ||
+			    smem_getpart((char *)part_name, &start_block, &size_blocks))
+				return CMD_RET_FAILURE;
+			region_base = (u64)sfi->flash_block_size * start_block;
+			region_size = (u64)sfi->flash_block_size * size_blocks;
+		}
+		if (!region_size || region_base > mtd->size ||
+		    region_size > mtd->size - region_base || user_offset > region_size ||
+		    user_offset > 0xffffffffULL)
+			return CMD_RET_FAILURE;
+		remain = region_size - user_offset;
+		if (user_size && user_size < remain)
+			remain = user_size;
+		if (remain > 0xffffffffULL)
+			return CMD_RET_FAILURE;
+		chunk_size = remain;
+		left_to_read = chunk_size;
+		cur_offset = region_base + user_offset;
+		p_buf = (u_char *)(uintptr_t)load_addr;
 
 		while (left_to_read > 0) {
+			size_t received;
+
 			block_offset = cur_offset & (erasesize - 1);
-
-			if (cur_offset >= end_offset)
-				break;
-
-			if (nand_block_isbad(mtd, cur_offset & ~(erasesize - 1))) {
-				cur_offset += erasesize - block_offset;
-				continue;
-			}
-			if (left_to_read < (erasesize - block_offset))
-				read_length = left_to_read;
-			else
-				read_length = erasesize - block_offset;
-
-			nand_ret = nand_read(mtd, cur_offset, &read_length, p_buf);
-			if (nand_ret < 0 && nand_ret != -EUCLEAN) {
-				printf("nand read error at 0x%llx: %d\n", cur_offset, nand_ret);
+			read_length = min_t(size_t, left_to_read, erasesize - block_offset);
+			nand_ret = nand_block_isbad(mtd, cur_offset - block_offset);
+			if (nand_ret < 0)
 				return CMD_RET_FAILURE;
+			if (nand_ret > 0) {
+				/* Keep the physical layout and never send old RAM bytes. */
+				memset(p_buf, 0xff, read_length);
+			} else {
+				received = read_length;
+				nand_ret = nand_read(mtd, cur_offset, &received, p_buf);
+				if ((nand_ret && nand_ret != -EUCLEAN) || received != read_length) {
+					printf("nand read failed or was short at 0x%llx (%d)\n",
+					       (unsigned long long)cur_offset, nand_ret);
+					return CMD_RET_FAILURE;
+				}
 			}
 
 			left_to_read -= read_length;

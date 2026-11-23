@@ -44,12 +44,13 @@ jobs:
           git -C ../staging_dir fetch --no-tags --depth=1 https://github.com/1980490718/toolchain-arm_cortex-a7_gcc-5.2.0.git 0daf0879219130c46812cd5029fbcc2940316b16
           git -C ../staging_dir checkout --detach FETCH_HEAD
 
-      - name: Check Webfailsafe requests, transfers and ART rollback
+      - name: Check Webfailsafe transfers, NAND backups and ART rollback
         run: |
           cc -std=gnu99 -Wall -Wextra -Werror tests/test-request.c -o /tmp/be7000-test-request
           /tmp/be7000-test-request
           python3 tests/test-art-rollback.py
           python3 tests/test-httpd-transfers.py
+          python3 tests/test-nand-backup.py
       - name: Build Xiaomi BE7000 U-Boot
         run: ./build.sh ipq9574_xiaomi_be7000
 
