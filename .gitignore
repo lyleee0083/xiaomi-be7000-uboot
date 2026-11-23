@@ -102,7 +102,6 @@ GTAGS
 # Exclude file
 arch/arm/dts/dtbtable.S
 arch/arm/dts/compressed_dtb/dtbcombined.S
-tools/mbn_tools.pyc
 
 # failsafe generated files
 failsafe/fsdata.c
