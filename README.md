@@ -2,21 +2,9 @@
 
 面向小米 BE7000（Qualcomm IPQ9574）的 U-Boot 项目，基于 [1980490718/u-boot-2016](https://github.com/1980490718/u-boot-2016) 的 Qualcomm QSDK 12.5 U-Boot。项目提供 `ipq9574_xiaomi_be7000` 构建目标、基于 lwIP 的 Webfailsafe 恢复界面，以及针对原厂 ART 分区布局的 MAC 读写与校验。
 
-## 下载
+## 功能
 
-在 [Releases](https://github.com/lyleee0083/xiaomi-be7000-uboot/releases) 下载 BE7000 的 MBN 镜像，并核对发布页提供的 SHA-256。BE7000 专版使用 `be7000-v` 标签。预发行版本的验证范围见对应发布说明，真机启动和 NAND 擦写需另行验收。
-
-## GitHub Actions 构建
-
-1. 打开 [Build Xiaomi BE7000 U-Boot](https://github.com/lyleee0083/xiaomi-be7000-uboot/actions/workflows/build-ipq-uboot.yml)。
-2. 点击 **Run workflow**，选择 `main`，然后启动构建。
-3. 构建成功后打开该次运行，在 **Artifacts** 下载 `openwrt-ipq9574_xiaomi_be7000-u-boot-<版本>.mbn`。
-
-`main` 分支推送和以 `main` 为目标的 Pull Request 也会触发工作流。工作流检查 Webfailsafe 传输、NAND 备份和 ART 回滚，并使用 Python 3 封装 MBN v6（SHA-384）镜像。Actions 产物保留 30 天。
-
-产物版本由 [工作流配置](.github/workflows/build-ipq-uboot.yml) 中的 `ARTIFACT_VERSION` 指定。准备发布新版产物时递增版本号，同一版本的重跑沿用原版本号。
-
-## 使用说明
+Webfailsafe 提供网页终端、分区备份和刷写。ART/MAC 定制支持原厂布局下的 MAC 读写与校验。
 
 ### ART/MAC 定制
 
@@ -24,9 +12,13 @@ ART 布局来自小米 BE7000 原厂固件。项目支持六个有线和六个�
 
 写入通过 NAND MTD 完成。程序整块读取，保留同一擦除块内的其他 ART 数据，写入后逐字节回读核对整个擦除块。读写范围受 SMEM 报告的实际分区长度和 NAND 几何约束。
 
+## 快速开始
+
+先在 [Releases](https://github.com/lyleee0083/xiaomi-be7000-uboot/releases) 选择适用于 BE7000 的 MBN 镜像并核对 SHA-256。使用 Webfailsafe 前，请让电脑与路由器直连，并与其他设备隔离。
+
 ### Webfailsafe 备份与刷写
 
-Webfailsafe 通过 HTTP 提供上游网页终端、分区备份和刷写。网页终端无需登录，请在与其他设备隔离的直连网络使用。关闭自动重启后，可以在网页上手动重启。
+Webfailsafe 通过 HTTP 提供上游网页终端、分区备份和刷写。网页终端无需登录。关闭自动重启后，可以在网页上手动重启。
 
 NAND 数据区分块备份用 `FF` 字节填充坏块，保留其物理位置。需要保留 OOB 数据时，请选择 OOB 模式。
 
@@ -36,7 +28,15 @@ NAND 数据区分块备份用 `FF` 字节填充坏块，保留其物理位置。
 
 若写入失败，串口会报告偏移和失败阶段，程序会尝试回滚已触及的可读块。若日志显示回滚不完整，请保持供电并使用设备专属备份恢复。断电、坏块或不可纠正的旧数据会限制回滚。
 
-## 源码结构
+## 构建与测试
+
+1. 打开 [Build Xiaomi BE7000 U-Boot](https://github.com/lyleee0083/xiaomi-be7000-uboot/actions/workflows/build-ipq-uboot.yml)。
+2. 点击 **Run workflow**，选择 `main`，然后启动构建。
+3. 构建成功后打开该次运行，在 **Artifacts** 下载 `openwrt-ipq9574_xiaomi_be7000-u-boot-<版本>.mbn`。
+
+`main` 分支推送和以 `main` 为目标的 Pull Request 也会触发工作流。工作流检查 Webfailsafe 传输、NAND 备份和 ART 回滚，并使用 Python 3 封装 MBN v6（SHA-384）镜像。Actions 产物保留 30 天。
+
+## 仓库结构
 
 | 路径 | 用途 |
 | --- | --- |
@@ -47,6 +47,12 @@ NAND 数据区分块备份用 `FF` 字节填充坏块，保留其物理位置。
 | [`tests/`](tests)、[`.github/workflows/`](.github/workflows) | 离线测试与 GitHub Actions 工作流 |
 
 `lwip/`、`main/`、`uip/` 前缀的标签和其他日期标签保留了上游历史快照。
+
+## 版本发布
+
+在 [Releases](https://github.com/lyleee0083/xiaomi-be7000-uboot/releases) 下载 BE7000 的 MBN 镜像，并核对发布页提供的 SHA-256。BE7000 专版使用 `be7000-v` 标签。预发行版本的验证范围见对应发布说明，真机启动和 NAND 擦写需另行验收。
+
+产物版本由 [工作流配置](.github/workflows/build-ipq-uboot.yml) 中的 `ARTIFACT_VERSION` 指定。准备发布新版产物时递增版本号，同一版本的重跑沿用原版本号。
 
 ## 许可与声明
 
