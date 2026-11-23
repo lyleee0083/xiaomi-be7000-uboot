@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  ARTIFACT_VERSION: '0.0.7'
+  ARTIFACT_VERSION: '0.0.8'
   APT_SNAPSHOT: '20261118T000000Z'
 
 jobs:
@@ -44,11 +44,12 @@ jobs:
           git -C ../staging_dir fetch --no-tags --depth=1 https://github.com/1980490718/toolchain-arm_cortex-a7_gcc-5.2.0.git 0daf0879219130c46812cd5029fbcc2940316b16
           git -C ../staging_dir checkout --detach FETCH_HEAD
 
-      - name: Check Webfailsafe request parsing and ART rollback
+      - name: Check Webfailsafe requests, transfers and ART rollback
         run: |
           cc -std=gnu99 -Wall -Wextra -Werror tests/test-request.c -o /tmp/be7000-test-request
           /tmp/be7000-test-request
           python3 tests/test-art-rollback.py
+          python3 tests/test-httpd-transfers.py
       - name: Build Xiaomi BE7000 U-Boot
         run: ./build.sh ipq9574_xiaomi_be7000
 
