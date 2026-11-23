@@ -12,7 +12,7 @@
 2. 点击 **Run workflow**，选择 `main`，然后启动构建。
 3. 构建成功后打开该次运行，在 **Artifacts** 下载 `openwrt-ipq9574_xiaomi_be7000-u-boot-<版本>.mbn`。
 
-`main` 分支推送和以 `main` 为目标的 Pull Request 也会触发工作流。工作流检查 Webfailsafe 传输、NAND 备份和 ART 回滚，并生成 MBN v6（SHA-384）镜像。Actions 产物保留 30 天。
+`main` 分支推送和以 `main` 为目标的 Pull Request 也会触发工作流。工作流检查 Webfailsafe 传输、NAND 备份和 ART 回滚，并使用 Python 3 封装 MBN v6（SHA-384）镜像。Actions 产物保留 30 天。
 
 产物版本由 [工作流配置](.github/workflows/build-ipq-uboot.yml) 中的 `ARTIFACT_VERSION` 指定。准备发布新版产物时递增版本号，同一版本的重跑沿用原版本号。
 
@@ -43,7 +43,7 @@ NAND 数据区分块备份用 `FF` 字节填充坏块，保留其物理位置。
 | [`board/`](board) | IPQ9574 板级实现和 Qualcomm 共用代码 |
 | [`arch/arm/dts/`](arch/arm/dts) | BE7000 设备树及其引用的基础 DTSI |
 | [`failsafe/`](failsafe) | Webfailsafe 源码及网页资源 |
-| [`configs/`](configs)、[`build.sh`](build.sh) | 构建配置及构建入口 |
+| [`configs/`](configs)、[`scripts/build-be7000.sh`](scripts/build-be7000.sh) | 构建配置及构建入口 |
 | [`tests/`](tests)、[`.github/workflows/`](.github/workflows) | 离线测试与 GitHub Actions 工作流 |
 
 `lwip/`、`main/`、`uip/` 前缀的标签和其他日期标签保留了上游历史快照。

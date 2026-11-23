@@ -52,7 +52,7 @@ jobs:
           python3 tests/test-httpd-transfers.py
           python3 tests/test-nand-backup.py
       - name: Build Xiaomi BE7000 U-Boot
-        run: ./build.sh ipq9574_xiaomi_be7000
+        run: bash scripts/build-be7000.sh
 
       - name: Record ART/MAC symbol addresses
         run: |
