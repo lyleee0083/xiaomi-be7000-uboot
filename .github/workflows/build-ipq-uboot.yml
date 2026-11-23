@@ -11,7 +11,8 @@ permissions:
   contents: read
 
 env:
-  ARTIFACT_VERSION: '0.0.8'
+  VERSION_BASE_COMMIT: '52a8ad891a929e624ec3ddc16a63f6f82f3e42c0'
+  VERSION_BASE_PATCH: '8'
   APT_SNAPSHOT: '20261118T000000Z'
 
 jobs:
@@ -19,11 +20,23 @@ jobs:
     name: Verify BE7000 U-Boot
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Calculate the build version
+        id: version
+        shell: bash
+        run: |
+          git merge-base --is-ancestor "$VERSION_BASE_COMMIT" HEAD
+          distance=$(git rev-list --first-parent --count "$VERSION_BASE_COMMIT..HEAD")
+          version="0.0.$((VERSION_BASE_PATCH + distance))"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -58,20 +71,90 @@ jobs:
         run: |
           awk '$1 ~ /^0x[[:xdigit:]]+$/ && $2 ~ /^(__rel_dyn_start|__rel_dyn_end|macaddr_(read|modify)_(base|wifi)|macaddr_wifi_(offset|cs_offset|checksum|cs_valid)|memalign|free|macaddr_restore_art_image|mtd_(read|write|erase|block_isbad)|smem_getpart|qca_smem_flash_info|nand_info)$/ { print $1, $2 }' u-boot.map
 
-      - name: Add the build version to the MBN filename
+      - name: Prepare the MBN and its checksum
         shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if [[ ! "$ARTIFACT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            printf 'Invalid artifact version: %s\n' "$ARTIFACT_VERSION" >&2
-            exit 1
-          fi
-          mv -- bin/openwrt-ipq9574_xiaomi_be7000-u-boot.mbn \
-            "bin/openwrt-ipq9574_xiaomi_be7000-u-boot-${ARTIFACT_VERSION}.mbn"
+          cd bin
+          asset="openwrt-ipq9574_xiaomi_be7000-u-boot-$VERSION.mbn"
+          mv -- openwrt-ipq9574_xiaomi_be7000-u-boot.mbn "$asset"
+          sha256sum -- "$asset" > SHA256SUMS.txt
 
-      - name: Upload the BE7000 MBN image
+      - name: Upload release files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          path: bin/openwrt-ipq9574_xiaomi_be7000-u-boot-${{ env.ARTIFACT_VERSION }}.mbn
+          name: release-files
+          path: |
+            bin/openwrt-ipq9574_xiaomi_be7000-u-boot-${{ steps.version.outputs.version }}.mbn
+            bin/SHA256SUMS.txt
           if-no-files-found: error
-          archive: false
           retention-days: 30
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    if: >-
+      vars.AUTO_PUBLISH_RELEASES == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: publish-releases
+      queue: max
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Publish verified build
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag=be7000-v"$VERSION"
+          asset=openwrt-ipq9574_xiaomi_be7000-u-boot-"$VERSION".mbn
+          title="Xiaomi BE7000 U-Boot $VERSION（待真机验收）"
+          notes="GitHub Actions 已完成构建和离线检查。真机启动与 NAND 擦写需另行验收。[构建记录]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+          work_dir=$(mktemp -d "$RUNNER_TEMP/release.XXXXXX")
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name release-files --dir "$work_dir"
+          cd -- "$work_dir"
+          test -s "$asset"
+          if [[ "$(cat SHA256SUMS.txt)" != "$(sha256sum -- "$asset")" ]]; then
+            echo "The build asset does not match SHA256SUMS.txt." >&2
+            exit 1
+          fi
+
+          tag_commit=$(gh api graphql \
+            -f 'query=query($owner:String!,$name:String!,$ref:String!){repository(owner:$owner,name:$name){ref(qualifiedName:$ref){target{oid ... on Tag{target{oid}}}}}}' \
+            -f owner="${GITHUB_REPOSITORY%%/*}" -f name="${GITHUB_REPOSITORY#*/}" \
+            -f ref="refs/tags/$tag" --jq '.data.repository.ref.target | .target.oid // .oid // empty')
+          if [[ -n "$tag_commit" && "$tag_commit" != "$GITHUB_SHA" ]]; then
+            echo "Tag $tag already points to a different commit." >&2
+            exit 1
+          fi
+
+          releases=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")
+          existing=$(jq -c --arg tag "$tag" '[.[][] | select(.tag_name == $tag)] | first // empty' <<< "$releases")
+          if [[ -n "$existing" ]] && jq -e '.draft == false' <<< "$existing" >/dev/null; then
+            test "$tag_commit" = "$GITHUB_SHA"
+            jq -e --arg asset "$asset" --argjson prerelease true '
+              .prerelease == $prerelease and
+              ([.assets[] | select(.state == "uploaded" and .size > 0) | .name] | sort) ==
+                ([$asset, "SHA256SUMS.txt"] | sort)
+            ' <<< "$existing" >/dev/null
+            echo "Release $tag is already published for this commit."
+            exit 0
+          fi
+
+          release_flags=(--prerelease --latest=false)
+          if [[ -n "$existing" ]]; then
+            test "$(jq -r '.target_commitish' <<< "$existing")" = "$GITHUB_SHA"
+            gh release upload "$tag" "$asset" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --title "$title" --notes "$notes" "${release_flags[@]}"
+          else
+            gh release create "$tag" "$asset" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "$title" --notes "$notes" "${release_flags[@]}"
+          fi
