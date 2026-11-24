@@ -50,9 +50,9 @@ NAND 数据区分块备份用 `FF` 字节填充坏块，保留其物理位置。
 
 ## 版本发布
 
-在 [Releases](https://github.com/lyleee0083/xiaomi-be7000-uboot/releases) 下载 BE7000 的 MBN 镜像，并核对发布页提供的 SHA-256。BE7000 专版使用 `be7000-v` 标签。预发行版本的验证范围见对应发布说明，真机启动和 NAND 擦写需另行验收。
+在 [Releases](https://github.com/lyleee0083/xiaomi-be7000-uboot/releases) 下载 BE7000 的 MBN 镜像，并核对发布页提供的 SHA-256。BE7000 专版使用 `be7000-v` 标签。各版本的验证范围见对应发布说明，真机启动和 NAND 擦写需另行验收。
 
-[工作流](.github/workflows/build-ipq-uboot.yml) 根据 `main` 的提交历史递增版本。`main` 构建和测试通过后自动发布预发行版本，同一提交重跑沿用原版本。
+[工作流](.github/workflows/build-ipq-uboot.yml) 根据 `main` 的提交历史递增版本。`main` 构建和测试通过后自动发布正式版本，同一提交重跑沿用原版本。
 
 ## 许可与声明
 
