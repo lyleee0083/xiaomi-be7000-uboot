@@ -116,7 +116,7 @@ jobs:
           set -euo pipefail
           tag=be7000-v"$VERSION"
           asset=openwrt-ipq9574_xiaomi_be7000-u-boot-"$VERSION".mbn
-          title="Xiaomi BE7000 U-Boot $VERSION（待真机验收）"
+          title="Xiaomi BE7000 U-Boot $VERSION"
           notes="GitHub Actions 已完成构建和离线检查。真机启动与 NAND 擦写需另行验收。[构建记录]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
           work_dir=$(mktemp -d "$RUNNER_TEMP/release.XXXXXX")
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name release-files --dir "$work_dir"
@@ -140,7 +140,7 @@ jobs:
           existing=$(jq -c --arg tag "$tag" '[.[][] | select(.tag_name == $tag)] | first // empty' <<< "$releases")
           if [[ -n "$existing" ]] && jq -e '.draft == false' <<< "$existing" >/dev/null; then
             test "$tag_commit" = "$GITHUB_SHA"
-            jq -e --arg asset "$asset" --argjson prerelease true '
+            jq -e --arg asset "$asset" --argjson prerelease false '
               .prerelease == $prerelease and
               ([.assets[] | select(.state == "uploaded" and .size > 0) | .name] | sort) ==
                 ([$asset, "SHA256SUMS.txt"] | sort)
@@ -149,7 +149,10 @@ jobs:
             exit 0
           fi
 
-          release_flags=(--prerelease --latest=false)
+          latest_version=$(jq -r '.[][] | select(.draft == false and .prerelease == false) | .tag_name | select(test("^be7000-v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("be7000-v")' <<< "$releases")
+          newest=$(printf '%s\n%s\n' "$VERSION" "$latest_version" | sort -V | tail -n 1)
+          release_flags=(--prerelease=false --latest=false)
+          if [[ "$newest" == "$VERSION" ]]; then release_flags=(--prerelease=false --latest); fi
           if [[ -n "$existing" ]]; then
             test "$(jq -r '.target_commitish' <<< "$existing")" = "$GITHUB_SHA"
             gh release upload "$tag" "$asset" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
