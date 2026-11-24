@@ -95,7 +95,7 @@ jobs:
     name: Publish GitHub Release
     needs: build
     if: >-
-      vars.AUTO_PUBLISH_RELEASES == 'true' &&
+      github.repository == 'lyleee0083/xiaomi-be7000-uboot' &&
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
