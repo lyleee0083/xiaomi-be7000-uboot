@@ -32,7 +32,7 @@ NAND 数据区分块备份用 `FF` 字节填充坏块，保留其物理位置。
 
 1. 打开 [Build Xiaomi BE7000 U-Boot](https://github.com/lyleee0083/xiaomi-be7000-uboot/actions/workflows/build-ipq-uboot.yml)。
 2. 点击 **Run workflow**，选择 `main`，然后启动构建。
-3. 构建成功后打开该次运行，在 **Artifacts** 下载 `release-files`，其中包含 MBN 镜像和 `SHA256SUMS.txt`。
+3. 构建成功后打开该次运行，在 **Artifacts** 下载 `u-boot-xiaomi-be7000-x.x.x`，其中包含同名 MBN 镜像和 `SHA256SUMS.txt`。
 
 `main` 分支推送和以 `main` 为目标的 Pull Request 也会触发工作流。工作流检查 Webfailsafe 传输、NAND 备份和 ART 回滚，并使用 Python 3 封装 MBN v6（SHA-384）镜像。Actions 产物保留 30 天。
 
@@ -50,7 +50,7 @@ NAND 数据区分块备份用 `FF` 字节填充坏块，保留其物理位置。
 
 ## 版本发布
 
-在 [Releases](https://github.com/lyleee0083/xiaomi-be7000-uboot/releases) 下载 BE7000 的 MBN 镜像，并核对发布页提供的 SHA-256。BE7000 专版使用 `be7000-v` 标签。各版本的验证范围见对应发布说明，真机启动和 NAND 擦写需另行验收。
+在 [Releases](https://github.com/lyleee0083/xiaomi-be7000-uboot/releases) 下载 `u-boot-xiaomi-be7000-x.x.x.mbn`，并核对发布页提供的 SHA-256。BE7000 专版使用 `be7000-v` 标签。各版本的验证范围见对应发布说明，真机启动和 NAND 擦写需另行验收。
 
 [工作流](.github/workflows/build-ipq-uboot.yml) 根据 `main` 的提交历史递增版本。`main` 构建和测试通过后自动发布正式版本，同一提交重跑沿用原版本。
 
