@@ -83,13 +83,18 @@ jobs:
           asset="$PACKAGE_NAME.mbn"
           sha256sum -- "$asset" > SHA256SUMS.txt
 
-      - name: Upload release files
+      - name: Upload deliverable
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ steps.version.outputs.package_name }}
-          path: |
-            bin/${{ steps.version.outputs.package_name }}.mbn
-            bin/SHA256SUMS.txt
+          path: bin/${{ steps.version.outputs.package_name }}.mbn
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload checksums
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: bin/SHA256SUMS.txt
+          archive: false
           if-no-files-found: error
           retention-days: 30
 
@@ -109,6 +114,16 @@ jobs:
       actions: read
       contents: write
     steps:
+      - name: Download verified deliverable
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build.outputs.package_name }}.mbn
+          path: ${{ runner.temp }}/release-files
+      - name: Download checksums
+        uses: actions/download-artifact@v8
+        with:
+          name: SHA256SUMS.txt
+          path: ${{ runner.temp }}/release-files
       - name: Publish verified build
         shell: bash
         env:
@@ -121,9 +136,7 @@ jobs:
           asset="$PACKAGE_NAME.mbn"
           title="Xiaomi BE7000 U-Boot $VERSION"
           notes="GitHub Actions 已完成构建和离线检查。真机启动与 NAND 擦写需另行验收。[构建记录]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
-          work_dir=$(mktemp -d "$RUNNER_TEMP/release.XXXXXX")
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$PACKAGE_NAME" --dir "$work_dir"
-          cd -- "$work_dir"
+          cd -- "$RUNNER_TEMP/release-files"
           test -s "$asset"
           if [[ "$(cat SHA256SUMS.txt)" != "$(sha256sum -- "$asset")" ]]; then
             echo "The build asset does not match SHA256SUMS.txt." >&2
