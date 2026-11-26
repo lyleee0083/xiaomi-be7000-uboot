@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 20
     outputs:
       version: ${{ steps.version.outputs.version }}
+      package_name: ${{ steps.version.outputs.package_name }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,7 +37,7 @@ jobs:
           git merge-base --is-ancestor "$VERSION_BASE_COMMIT" HEAD
           distance=$(git rev-list --first-parent --count "$VERSION_BASE_COMMIT..HEAD")
           version="0.0.$((VERSION_BASE_PATCH + distance))"
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\npackage_name=u-boot-xiaomi-be7000-%s\n' "$version" "$version" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -65,7 +66,9 @@ jobs:
           python3 tests/test-httpd-transfers.py
           python3 tests/test-nand-backup.py
       - name: Build Xiaomi BE7000 U-Boot
-        run: bash scripts/build-be7000.sh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/build-be7000.sh "$VERSION"
 
       - name: Record ART/MAC symbol addresses
         run: |
@@ -74,19 +77,18 @@ jobs:
       - name: Prepare the MBN and its checksum
         shell: bash
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          PACKAGE_NAME: ${{ steps.version.outputs.package_name }}
         run: |
           cd bin
-          asset="openwrt-ipq9574_xiaomi_be7000-u-boot-$VERSION.mbn"
-          mv -- openwrt-ipq9574_xiaomi_be7000-u-boot.mbn "$asset"
+          asset="$PACKAGE_NAME.mbn"
           sha256sum -- "$asset" > SHA256SUMS.txt
 
       - name: Upload release files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-files
+          name: ${{ steps.version.outputs.package_name }}
           path: |
-            bin/openwrt-ipq9574_xiaomi_be7000-u-boot-${{ steps.version.outputs.version }}.mbn
+            bin/${{ steps.version.outputs.package_name }}.mbn
             bin/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
@@ -112,14 +114,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.build.outputs.version }}
+          PACKAGE_NAME: ${{ needs.build.outputs.package_name }}
         run: |
           set -euo pipefail
           tag=be7000-v"$VERSION"
-          asset=openwrt-ipq9574_xiaomi_be7000-u-boot-"$VERSION".mbn
+          asset="$PACKAGE_NAME.mbn"
           title="Xiaomi BE7000 U-Boot $VERSION"
           notes="GitHub Actions 已完成构建和离线检查。真机启动与 NAND 擦写需另行验收。[构建记录]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
           work_dir=$(mktemp -d "$RUNNER_TEMP/release.XXXXXX")
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name release-files --dir "$work_dir"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$PACKAGE_NAME" --dir "$work_dir"
           cd -- "$work_dir"
           test -s "$asset"
           if [[ "$(cat SHA256SUMS.txt)" != "$(sha256sum -- "$asset")" ]]; then
