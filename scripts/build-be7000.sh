@@ -1,11 +1,23 @@
 #!/bin/bash
 set -euo pipefail
 
+release_version=${1-}
+if [[ $# -gt 1 || ( $# -eq 1 && ! $release_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ) ]]; then
+	printf 'Usage: %s [major.minor.patch]\n' "$0" >&2
+	exit 2
+fi
+
 cd -- "$(dirname -- "$0")/.."
 
 readonly board=ipq9574_xiaomi_be7000
 readonly defconfig="$board"_defconfig
-readonly output="bin/openwrt-$board-u-boot.mbn"
+output="bin/openwrt-$board-u-boot.mbn"
+make_version=()
+if [[ -n $release_version ]]; then
+	output="bin/u-boot-xiaomi-be7000-$release_version.mbn"
+	make_version=("UBOOTVERSION=$release_version")
+fi
+readonly output
 readonly toolchain_commit=0daf0879219130c46812cd5029fbcc2940316b16
 
 export ARCH=arm
@@ -39,7 +51,7 @@ done
 
 make clean
 make "$defconfig"
-make -j"$(nproc)"
+make -j"$(nproc)" "${make_version[@]}"
 
 mkdir -p -- bin
 package_dir=$(mktemp -d bin/.be7000.XXXXXX)
@@ -49,5 +61,13 @@ trap 'rm -rf -- "$package_dir"' EXIT
 python3 tools/elftombn_py3.py -f "$package_dir/u-boot.strip" \
 	-o "$package_dir/u-boot.mbn" -v 6 -a ipq9574
 test -s "$package_dir/u-boot.mbn"
+if [[ -n $release_version ]]; then
+	embedded_version="${release_version}${LOCALVERSION}"
+	if ! grep -aFq -- "U-Boot $embedded_version (" "$package_dir/u-boot.mbn"; then
+		printf 'MBN does not contain the expected U-Boot version %s.\n' "$embedded_version" >&2
+		exit 1
+	fi
+	printf 'Verified MBN version %s\n' "$embedded_version"
+fi
 mv -f -- "$package_dir/u-boot.mbn" "$output"
 printf 'Built %s\n' "$output"
