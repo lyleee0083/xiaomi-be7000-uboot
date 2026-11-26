@@ -20,3 +20,8 @@
 - Verify the Qualcomm QSDK U-Boot provenance in the README when modifying upstream code. Verify the Xiaomi stock firmware layout and existing test coverage when changing ART or MAC handling.
 - Run the applicable offline regressions under `tests/` for Webfailsafe, NAND backup, and ART changes. The `Verify BE7000 U-Boot` check covers pull requests to `main`.
 - Deliver MBN images and checksums through Actions or Releases. Check automatic release conditions before triggering a build. Keep device operations and publication within task authorization, and report offline verification separately from hardware acceptance.
+
+## Versioned deliverables
+
+- When a change affects a versioned deliverable, build and deliver the latest authorized repository state. Advance the project release version and use it consistently in the output filename, archive directory, package metadata and the executable or application's reported version where applicable.
+- Record upstream versions and revisions separately. Check the version and checksum in the final artifact. Follow the authorized scope for publishing and deployment.
