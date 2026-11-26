@@ -32,7 +32,7 @@ NAND 数据区分块备份用 `FF` 字节填充坏块，保留其物理位置。
 
 1. 打开 [Build Xiaomi BE7000 U-Boot](https://github.com/lyleee0083/xiaomi-be7000-uboot/actions/workflows/build-ipq-uboot.yml)。
 2. 点击 **Run workflow**，选择 `main`，然后启动构建。
-3. 构建成功后打开该次运行，在 **Artifacts** 下载 `u-boot-xiaomi-be7000-x.x.x`，其中包含同名 MBN 镜像和 `SHA256SUMS.txt`。
+3. 构建成功后打开该次运行，在 **Artifacts** 分别下载 `u-boot-xiaomi-be7000-x.x.x.mbn` 和 `SHA256SUMS.txt`。
 
 `main` 分支推送和以 `main` 为目标的 Pull Request 也会触发工作流。工作流检查 Webfailsafe 传输、NAND 备份和 ART 回滚，并使用 Python 3 封装 MBN v6（SHA-384）镜像。Actions 产物保留 30 天。
 
