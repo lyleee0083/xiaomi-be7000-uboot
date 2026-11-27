@@ -15,7 +15,7 @@ These instructions apply to all agents working in this repository.
 - Make fixes directly in the maintained source code, configuration, or build logic that owns the behavior, including in forks. Do not add patch files, build-time source rewrites, or redundant wrappers as substitutes for direct fixes.
 - Start new upstream-based work and upstream updates from the latest commit on the applicable upstream branch. Verify the branch tip remotely and record the upstream repository, branch, and full commit SHA. Use the upstream default branch unless the task specifies another branch or revision.
 - Run all repository builds and compilation exclusively in GitHub Actions; do not build or compile locally. Deliver the verified artifacts from the successful workflow run.
-- Default GitHub Actions build and packaging jobs to the latest stable Linux runner (`ubuntu-latest`). Use a different runner only if the deliverable cannot be built on `ubuntu-latest`.
+- Keep GitHub Actions on the latest stable Linux runner (`ubuntu-latest`) as the sole build and packaging path. Use a different GitHub Actions runner only when the deliverable cannot be built on `ubuntu-latest`.
 
 ### GitHub CLI
 
