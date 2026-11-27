@@ -8,19 +8,23 @@
 ## GitHub
 
 - Make fixes directly in the maintained source code, configuration, or build logic that owns the behavior, including in forks. Do not add patch files, build-time source rewrites, or redundant wrappers as substitutes for direct fixes.
+- Start new upstream-based work and upstream updates from the latest commit on the applicable upstream branch. Verify the branch tip remotely and record the upstream repository, branch, and full commit SHA. Use the upstream default branch unless the task specifies another branch or revision.
+- Run all repository builds and compilation exclusively in GitHub Actions; do not build or compile locally. Deliver the verified artifacts from the successful workflow run.
 - Prefer the verified official `gh`. On Windows, resolve the executable without running it and verify its contents with trusted installer evidence or an official release package. Use the verified absolute path and SHA-256. Use `gh api` for operations without a dedicated command. An authorized connector may perform the same read-only operation if the CLI is unavailable or unverified and repair is outside scope. Respect access denials.
 - Every GitHub repository must have an active `Protect main` ruleset for its default branch. Require pull requests and block branch deletion and force pushes. Require status checks that actually run on pull requests targeting the protected branch.
 - Enable and verify `delete_branch_on_merge: true` when creating or configuring a repository. Before merging a pull request, verify this setting in its source repository, including a fork, and report any limit on automatic branch deletion.
 - Before writing to a shared branch, verify the current head and check for competing writers. Follow the repository rules for reviews and checks, and verify the remote commit and source branch cleanup after merging.
-- Maintain one H1 in the primary README, with the project name and purpose. Where applicable, keep the H2 order Features, Quick Start, Configuration, Build and Test, Repository Structure, Releases, and License. Use the established language, fenced code blocks with language identifiers, and relative links for repository files.
-- Name and link the upstream repository in the README, and record the source tag or commit when known. Credit imported components in the README or linked third-party notices and preserve applicable license and copyright notices.
+- Use Simplified Chinese for README and GitHub Release titles and bodies, including generated notes, unless directed otherwise. Keep official names and identifiers.
+- Start README with one project-name H1 and an overview, then applicable H2s in order 功能 → 快速开始 → 配置 → 构建与测试 → 仓库结构 → 版本发布 → 许可证.
+- Use `<project> <version>` for Release titles. Follow the summary with applicable H2s in order 主要变更 → 下载与校验 → 安装与升级 → 验证状态.
+- Use tagged code fences, relative README and tag-pinned Release file links. Keep upstream links, known refs, credits, licenses and copyright notices.
 
 ## Build and Verification
 
-- Target the Xiaomi BE7000 with Qualcomm IPQ9574. Use `configs/ipq9574_xiaomi_be7000_defconfig` and `scripts/build-be7000.sh`. Preserve shared code and device-tree dependencies used by this board.
+- Target the Xiaomi BE7000 with Qualcomm IPQ9574. Maintain `configs/ipq9574_xiaomi_be7000_defconfig` and `scripts/build-be7000.sh` as the authoritative configuration and GitHub Actions build entry points. Preserve shared code and device-tree dependencies used by this board.
 - Verify the Qualcomm QSDK U-Boot provenance in the README when modifying upstream code. Verify the Xiaomi stock firmware layout and existing test coverage when changing ART or MAC handling.
-- Run the applicable offline regressions under `tests/` for Webfailsafe, NAND backup, and ART changes. The `Verify BE7000 U-Boot` check covers pull requests to `main`.
-- Deliver MBN images and checksums through Actions or Releases. Check automatic release conditions before triggering a build. Keep device operations and publication within task authorization, and report offline verification separately from hardware acceptance.
+- Run Webfailsafe, NAND backup, and ART regression checks under `tests/` and U-Boot compilation exclusively through the `Verify BE7000 U-Boot` GitHub Actions workflow (`.github/workflows/build-ipq-uboot.yml`) on pull requests to `main` or authorized workflow runs.
+- Deliver MBN images and checksums through GitHub Actions artifacts or Releases. Check automatic release conditions before triggering a workflow run. Keep device operations and publication within task authorization, and report GitHub Actions verification and build results separately from hardware acceptance.
 
 ## Versioned deliverables
 
