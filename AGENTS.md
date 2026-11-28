@@ -8,6 +8,10 @@ These instructions apply to all agents working in this repository.
 - Confirm the repository root, target branch, worktree status, and applicable instructions before editing. Keep changes within the authorized task and preserve existing work.
 - Track build source, build configuration and scripts, test and validation code, and essential resources and documentation. Maintained configuration and rule data are source. Keep temporary files in the task directory. Deliver build packages and validation outputs through the project artifact channel when authorized.
 
+## Code simplicity and footprint
+
+- Keep all maintained code as simple and lightweight as practical. Prefer direct solutions and existing primitives. Remove unnecessary code, abstractions, dependencies, duplicated work, and resource use. Preserve required behavior, compatibility, and verification. Measure material size, memory, or performance changes when practical.
+
 ## GitHub
 
 ### Repository changes
